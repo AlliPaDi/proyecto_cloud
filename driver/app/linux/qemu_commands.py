@@ -2,12 +2,12 @@ from typing import List
 
 
 def create_disk(base_path: str, instance_path: str) -> str:
-    return f"qemu-img create -f qcow2 -b {base_path} {instance_path}"
+    return f"sudo qemu-img create -f qcow2 -b {base_path} -F qcow2 {instance_path}"
 
 
 def create_seed_iso(vm_name: str) -> str:
     return (
-        f"cloud-localds --network-config /tmp/net-{vm_name}.yaml"
+        f"sudo cloud-localds --network-config /tmp/net-{vm_name}.yaml"
         f" /tmp/seed-{vm_name}.iso"
         f" /tmp/user-{vm_name}.yaml /tmp/meta-{vm_name}.yaml"
     )
@@ -29,7 +29,7 @@ def launch_vm(
     vnc_display: int,
 ) -> str:
     parts = [
-        "qemu-system-x86_64",
+        "sudo qemu-system-x86_64",
         f"-m {ram}",
         f"-smp {vcpu}",
         f"-drive file={instance_path},format=qcow2",
