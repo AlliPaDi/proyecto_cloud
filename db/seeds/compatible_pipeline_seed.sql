@@ -48,5 +48,31 @@ VALUES
 
 -- 7. TAREAS
 INSERT INTO tasks (slice_id, vm_id, task_type, status, worker_id, payload)
-SELECT slice_id, id, 'CREATE_VM', 'PLACEMENT_READY', worker_id, '{"task": "deploy"}' 
-FROM virtual_machines;
+SELECT
+    vm.slice_id,
+    vm.id,
+    'CREATE_VM',
+    'PLACEMENT_READY',
+    vm.worker_id,
+    jsonb_build_object(
+        'vm_name',       vm.name,
+        'base_image',    vm.base_image,
+        'base_path',     '/mnt/storage/base/',
+        'ram',           vm.ram,
+        'vcpu',          vm.vcpu,
+        'instance_path', COALESCE(vm.instance_path, '/mnt/storage/instances/' || vm.name || '.qcow2'),
+        'slice_id',      vm.slice_id,
+        'vlan_slice',    (SELECT n.vlan_id FROM networks n WHERE n.slice_id = vm.slice_id ORDER BY n.id LIMIT 1),
+        'interfaces',    COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+                'network_id',     vi.network_id,
+                'mac_address',    vi.mac_address,
+                'ip_address',     vi.ip_address,
+                'interface_name', vi.interface_name,
+                'tap_name',       COALESCE(vi.tap_name, 'tap-' || vm.name || '-' || vi.interface_name)
+            ))
+            FROM vm_interfaces vi
+            WHERE vi.vm_id = vm.id
+        ), '[]'::jsonb)
+    )
+FROM virtual_machines vm;
