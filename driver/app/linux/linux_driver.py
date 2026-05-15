@@ -30,7 +30,7 @@ class LinuxDriver(BaseDriver):
         if vm.get("base_path"):
             base_path = vm["base_path"]
         else:
-            base_dir = cfg.BASE_IMAGE_PATH.rstrip("/")
+            base_dir = cfg.settings.BASE_IMAGE_PATH.rstrip("/")
             base_path = f"{base_dir}/{base_image}"
 
         has_remote = any(iface["is_remote"] for iface in interfaces)
@@ -53,7 +53,7 @@ class LinuxDriver(BaseDriver):
         launch_cmd = qemu.launch_vm(vm_name, ram, vcpu, instance_path, interfaces, vnc_display)
         commands.append(launch_cmd)
 
-        if not cfg.SSH_ENABLED:
+        if not cfg.settings.SSH_ENABLED:
             return {
                 "process_id": 99999,
                 "vnc_port": 5900 + vnc_display,
@@ -78,7 +78,7 @@ class LinuxDriver(BaseDriver):
         executed: list[str] = []
         try:
             async with asyncssh.connect(
-                host, username=cfg.SSH_USER, known_hosts=None, **self._connect_kwargs()
+                host, username=cfg.settings.SSH_USER, known_hosts=None, **self._connect_kwargs()
             ) as conn:
                 for cmd in setup_cmds:
                     result = await conn.run(cmd, check=False)
@@ -123,7 +123,7 @@ class LinuxDriver(BaseDriver):
 
         rollback_actions: list[str] = []
 
-        if not cfg.SSH_ENABLED:
+        if not cfg.settings.SSH_ENABLED:
             if process_id:
                 rollback_actions.append(f"Killed QEMU process {process_id}")
             rollback_actions.append(f"Deleted disk {instance_path}")
@@ -135,7 +135,7 @@ class LinuxDriver(BaseDriver):
 
         try:
             async with asyncssh.connect(
-                worker_ip, username=cfg.SSH_USER, known_hosts=None, **self._connect_kwargs()
+                worker_ip, username=cfg.settings.SSH_USER, known_hosts=None, **self._connect_kwargs()
             ) as conn:
                 if process_id:
                     await conn.run(qemu.kill_process(process_id), check=False)
@@ -201,12 +201,12 @@ class LinuxDriver(BaseDriver):
         cmds.append(qemu.delete_pid_file(vm_name))
         rollback_actions.append(f"Deleted disk {instance_path}")
 
-        if not cfg.SSH_ENABLED:
+        if not cfg.settings.SSH_ENABLED:
             return rollback_actions
 
         try:
             async with asyncssh.connect(
-                worker_ip, username=cfg.SSH_USER, known_hosts=None, **self._connect_kwargs()
+                worker_ip, username=cfg.settings.SSH_USER, known_hosts=None, **self._connect_kwargs()
             ) as conn:
                 for cmd in cmds:
                     await conn.run(cmd, check=False)
@@ -216,6 +216,6 @@ class LinuxDriver(BaseDriver):
         return rollback_actions
 
     def _connect_kwargs(self) -> dict:
-        if cfg.SSH_PASSWORD:
-            return {"password": cfg.SSH_PASSWORD}
-        return {"client_keys": [cfg.SSH_KEY_PATH]}
+        if cfg.settings.SSH_PASSWORD:
+            return {"password": cfg.settings.SSH_PASSWORD}
+        return {"client_keys": [cfg.settings.SSH_KEY_PATH]}

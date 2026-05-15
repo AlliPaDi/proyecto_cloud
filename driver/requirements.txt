@@ -5,3 +5,4 @@ asyncpg==0.29.0
 asyncssh==2.14.2
 pydantic==2.7.1
 python-dotenv==1.0.1
+pydantic-settings==2.2.1
