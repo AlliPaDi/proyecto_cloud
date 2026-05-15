@@ -92,7 +92,22 @@ services:
       - INSTANCE_IMAGE_PATH=/mnt/storage/instances/
     volumes:
       - ./storage_mock/base:/mnt/storage/base/
-      - ./storage_mock/instances:/mnt/storage/instances/  
+      - ./storage_mock/instances:/mnt/storage/instances/
     depends_on:
       - postgres
+    restart: unless-stopped
+
+  dispatcher:
+    build: ./dispatcher
+    container_name: orchestrator-dispatcher
+    ports:
+      - "8087:8087"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator_db
+      - DRIVER_URL=http://driver:8088/driver/execute
+      - POLL_INTERVAL=5
+      - STUCK_TIMEOUT_MINUTES=10
+    depends_on:
+      - postgres
+      - driver
     restart: unless-stopped

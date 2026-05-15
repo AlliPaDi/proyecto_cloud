@@ -92,11 +92,11 @@ async def execute(req: ExecuteRequest, db: AsyncSession = Depends(cfg.get_db)):
             except Exception as rollback_err:
                 rollback_actions = [f"Error durante rollback: {str(rollback_err)}"]
 
-        # Actualizar la tarea a fallida en la BD
+        # Actualizar la tarea a fallida en la BD (con motivo del error)
         try:
             await db.execute(
-                text("UPDATE tasks SET status = 'FAILED' WHERE id = :task_id"),
-                {"task_id": req.task_id}
+                text("UPDATE tasks SET status = 'FAILED', error_msg = :msg WHERE id = :task_id"),
+                {"task_id": req.task_id, "msg": str(e)}
             )
             await db.commit()
         except:

@@ -5,6 +5,21 @@ def create_disk(base_path: str, instance_path: str) -> str:
     return f"qemu-img create -f qcow2 -b {base_path} {instance_path}"
 
 
+def create_seed_iso(vm_name: str) -> str:
+    return (
+        f"cloud-localds --network-config /tmp/net-{vm_name}.yaml"
+        f" /tmp/seed-{vm_name}.iso"
+        f" /tmp/user-{vm_name}.yaml /tmp/meta-{vm_name}.yaml"
+    )
+
+
+def delete_seed_files(vm_name: str) -> str:
+    return (
+        f"rm -f /tmp/seed-{vm_name}.iso /tmp/net-{vm_name}.yaml"
+        f" /tmp/user-{vm_name}.yaml /tmp/meta-{vm_name}.yaml"
+    )
+
+
 def launch_vm(
     vm_name: str,
     ram: int,
@@ -18,6 +33,7 @@ def launch_vm(
         f"-m {ram}",
         f"-smp {vcpu}",
         f"-drive file={instance_path},format=qcow2",
+        f"-drive file=/tmp/seed-{vm_name}.iso,media=cdrom",  # cloud-init NoCloud seed
     ]
     for i, iface in enumerate(interfaces):
         parts += [

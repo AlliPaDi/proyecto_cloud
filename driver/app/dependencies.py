@@ -9,9 +9,9 @@ class Settings(BaseSettings):
 
     # Configuración del Driver
     SSH_ENABLED: bool = False
-    SSH_USER: str = "root"
+    SSH_USER: str = "ubuntu"
     SSH_KEY_PATH: str = "/root/.ssh/id_rsa"
-    SSH_PASSWORD: Optional[str] = None
+    SSH_PASSWORD: Optional[str] = "ubuntu"
 
     # Rutas y Cluster
     BASE_IMAGE_PATH: str = "/mnt/storage/base/"

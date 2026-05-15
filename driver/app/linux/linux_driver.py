@@ -35,7 +35,7 @@ class LinuxDriver(BaseDriver):
 
         has_remote = any(iface["is_remote"] for iface in interfaces)
 
-        # Build full command sequence
+        # Secuencia completa de comandos
         commands: list[str] = []
         commands.append(qemu.create_disk(base_path, instance_path))
 
@@ -50,6 +50,9 @@ class LinuxDriver(BaseDriver):
         if has_remote:
             commands.extend(ovs.add_patch_ports(slice_id, vlan_slice))
 
+        # Seed ISO de cloud-init para configurar IPs en el guest OS
+        commands.append(qemu.create_seed_iso(vm_name))
+
         launch_cmd = qemu.launch_vm(vm_name, ram, vcpu, instance_path, interfaces, vnc_display)
         commands.append(launch_cmd)
 
@@ -61,7 +64,9 @@ class LinuxDriver(BaseDriver):
             }
 
         setup_cmds = commands[:-1]
-        executed, process_id = await self._run_create_ssh(worker_ip, setup_cmds, launch_cmd, vm_name)
+        executed, process_id = await self._run_create_ssh(
+            worker_ip, setup_cmds, launch_cmd, vm_name, interfaces
+        )
         return {
             "process_id": process_id,
             "vnc_port": 5900 + vnc_display,
@@ -74,12 +79,16 @@ class LinuxDriver(BaseDriver):
         setup_cmds: list[str],
         launch_cmd: str,
         vm_name: str,
+        interfaces: list,
     ) -> tuple[list[str], int]:
         executed: list[str] = []
         try:
             async with asyncssh.connect(
                 host, username=cfg.settings.SSH_USER, known_hosts=None, **self._connect_kwargs()
             ) as conn:
+                # Escribir archivos cloud-init via SFTP antes de ejecutar cloud-localds
+                await self._write_cloud_init_files(conn, vm_name, interfaces)
+
                 for cmd in setup_cmds:
                     result = await conn.run(cmd, check=False)
                     if result.exit_status != 0:
@@ -95,7 +104,7 @@ class LinuxDriver(BaseDriver):
                     )
                 executed.append(launch_cmd)
 
-                # Give QEMU time to write its PID file
+                # Dar tiempo a QEMU para escribir el .pid
                 await asyncio.sleep(1)
 
                 pid_cmd = qemu.read_pid(vm_name)
@@ -107,6 +116,44 @@ class LinuxDriver(BaseDriver):
 
         except (asyncssh.Error, OSError) as e:
             raise RuntimeError(f"SSH connection to {host} failed: {e}")
+
+    async def _write_cloud_init_files(self, conn, vm_name: str, interfaces: list) -> None:
+        """Escribe meta-data, user-data y network-config via SFTP para el seed ISO."""
+        meta_data = f"instance-id: {vm_name}\nlocal-hostname: {vm_name}\n"
+        user_data = "#cloud-config\n{}\n"
+        network_config = self._build_network_config(interfaces)
+
+        async with conn.start_sftp_client() as sftp:
+            for filename, content in [
+                (f"/tmp/meta-{vm_name}.yaml", meta_data),
+                (f"/tmp/user-{vm_name}.yaml", user_data),
+                (f"/tmp/net-{vm_name}.yaml", network_config),
+            ]:
+                async with sftp.open(filename, "w") as f:
+                    await f.write(content)
+
+    @staticmethod
+    def _build_network_config(interfaces: list) -> str:
+        """Genera YAML cloud-init network v2 con las IPs de cada interfaz del guest."""
+        lines = ["network:", "  version: 2", "  ethernets:"]
+        for iface in interfaces:
+            name = iface.get("interface_name", "")
+            ip = iface.get("ip_address", "")
+            mac = iface.get("mac_address", "")
+            subnet_cidr = iface.get("subnet_cidr")
+            if not name:
+                continue
+            prefix = subnet_cidr.split("/")[1] if subnet_cidr else "24"
+            lines += [f"    {name}:", "      dhcp4: false"]
+            if ip:
+                lines += ["      addresses:", f"        - {ip}/{prefix}"]
+            if mac:
+                lines += [
+                    "      match:",
+                    f"        macaddress: {mac}",
+                    f"      set-name: {name}",
+                ]
+        return "\n".join(lines) + "\n"
 
     async def delete_vm(self, payload: dict) -> dict:
         worker_ip = payload["worker_ip"]
@@ -131,6 +178,7 @@ class LinuxDriver(BaseDriver):
                 rollback_actions.append(f"Deleted TAP {iface['tap_name']} from {bridge_name}")
             if has_remote:
                 rollback_actions.append(f"Deleted patch-ports for slice {slice_id}")
+            rollback_actions.append(f"Deleted cloud-init seed files for {vm_name}")
             return {"rollback_actions": rollback_actions}
 
         try:
@@ -157,7 +205,11 @@ class LinuxDriver(BaseDriver):
                         await conn.run(cmd, check=False)
                     rollback_actions.append(f"Deleted patch-ports for slice {slice_id}")
 
-                # Remove br-slice if no ports remain
+                # Eliminar archivos temporales del seed cloud-init
+                await conn.run(qemu.delete_seed_files(vm_name), check=False)
+                rollback_actions.append(f"Deleted cloud-init seed files for {vm_name}")
+
+                # Borrar br-slice si ya no tiene puertos activos
                 list_result = await conn.run(ovs.list_ports(bridge_name), check=False)
                 remaining = [p for p in list_result.stdout.strip().splitlines() if p.strip()]
                 if not remaining:
@@ -170,11 +222,11 @@ class LinuxDriver(BaseDriver):
         return {"rollback_actions": rollback_actions}
 
     async def setup_network(self, payload: dict) -> None:
-        # Network setup is embedded in the create_vm sequence
+        # La configuración de red está embebida en create_vm
         pass
 
     async def rollback(self, payload: dict) -> List[str]:
-        """Best-effort cleanup after a failed create_vm."""
+        """Limpieza best-effort tras un create_vm fallido."""
         worker_ip = payload["worker_ip"]
         vm = payload["vm"]
         slice_info = payload["slice"]
@@ -199,7 +251,9 @@ class LinuxDriver(BaseDriver):
 
         cmds.append(qemu.delete_disk(instance_path))
         cmds.append(qemu.delete_pid_file(vm_name))
+        cmds.append(qemu.delete_seed_files(vm_name))
         rollback_actions.append(f"Deleted disk {instance_path}")
+        rollback_actions.append(f"Deleted cloud-init seed files for {vm_name}")
 
         if not cfg.settings.SSH_ENABLED:
             return rollback_actions
@@ -211,7 +265,7 @@ class LinuxDriver(BaseDriver):
                 for cmd in cmds:
                     await conn.run(cmd, check=False)
         except Exception:
-            pass  # best-effort: log nothing, don't re-raise
+            pass  # best-effort: no re-raise
 
         return rollback_actions
 

@@ -10,6 +10,7 @@ class InterfacePayload(BaseModel):
     mac_address: str = ""
     bridge_name: str = ""
     is_remote: bool = False
+    subnet_cidr: Optional[str] = None  # ej. "192.168.2.0/24"; si None se asume /24
 
 
 class VMPayload(BaseModel):
