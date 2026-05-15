@@ -78,3 +78,21 @@ services:
       - image-manager
       - networking
     restart: unless-stopped
+
+  driver:
+    build: ./driver
+    container_name: orchestrator-driver
+    ports:
+      - "8088:8088"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator_db
+      - SSH_ENABLED=false
+      - CLUSTER_TYPE=linux
+      - BASE_IMAGE_PATH=/mnt/storage/base/
+      - INSTANCE_IMAGE_PATH=/mnt/storage/instances/
+    volumes:
+      - ./storage_mock/base:/mnt/storage/base/
+      - ./storage_mock/instances:/mnt/storage/instances/  
+    depends_on:
+      - postgres
+    restart: unless-stopped

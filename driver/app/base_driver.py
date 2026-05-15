@@ -1,16 +1,17 @@
-# app/base_driver.py
 from abc import ABC, abstractmethod
+from typing import List
+
 
 class BaseDriver(ABC):
 
     @abstractmethod
     async def create_vm(self, payload: dict) -> dict:
-        """Crea la VM y retorna {process_id, vnc_port, instance_path}"""
+        """Crea la VM y retorna {process_id, vnc_port, commands_executed}"""
         ...
 
     @abstractmethod
-    async def delete_vm(self, payload: dict) -> None:
-        """Termina proceso QEMU y limpia recursos"""
+    async def delete_vm(self, payload: dict) -> dict:
+        """Termina proceso QEMU y limpia recursos. Retorna {rollback_actions}"""
         ...
 
     @abstractmethod
@@ -19,6 +20,6 @@ class BaseDriver(ABC):
         ...
 
     @abstractmethod
-    async def rollback(self, payload: dict) -> None:
-        """Limpieza completa ante fallo"""
+    async def rollback(self, payload: dict) -> List[str]:
+        """Limpieza completa ante fallo. Retorna lista de acciones realizadas."""
         ...
