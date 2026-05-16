@@ -105,12 +105,16 @@ class LinuxDriver(BaseDriver):
                 executed.append(launch_cmd)
 
                 # Dar tiempo a QEMU para escribir el .pid
-                await asyncio.sleep(1)
-
-                pid_cmd = qemu.read_pid(vm_name)
-                pid_result = await conn.run(pid_cmd, check=False)
-                if pid_result.exit_status != 0 or not pid_result.stdout.strip():
-                    raise RuntimeError(f"Could not read PID file for VM {vm_name!r}")
+                # Reintentamos hasta 5 veces con 2s de pausa (total ~10s)
+                pid_result = None
+                for attempt in range(5):
+                    await asyncio.sleep(2)
+                    pid_cmd = qemu.read_pid(vm_name)
+                    pid_result = await conn.run(pid_cmd, check=False)
+                    if pid_result.exit_status == 0 and pid_result.stdout.strip():
+                        break
+                else:
+                    raise RuntimeError(f"Could not read PID file for VM {vm_name!r} after 5 attempts")
 
                 return executed, int(pid_result.stdout.strip())
 
