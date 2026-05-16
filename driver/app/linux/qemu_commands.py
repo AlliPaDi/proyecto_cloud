@@ -49,7 +49,7 @@ def launch_vm(
 
 
 def read_pid(vm_name: str) -> str:
-    return f"cat /tmp/{vm_name}.pid"
+    return f"sudo cat /tmp/{vm_name}.pid"
 
 
 def kill_process(process_id: int) -> str:
