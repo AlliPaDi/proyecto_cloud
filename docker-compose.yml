@@ -12,6 +12,11 @@ services:
       POSTGRES_DB: orchestrator_db
     volumes:
       - ./db/init_schema.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestrator"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   auth:
@@ -108,6 +113,8 @@ services:
       - POLL_INTERVAL=5
       - STUCK_TIMEOUT_MINUTES=10
     depends_on:
-      - postgres
-      - driver
+      postgres:
+        condition: service_healthy
+      driver:
+        condition: service_started
     restart: unless-stopped
