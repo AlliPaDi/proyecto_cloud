@@ -91,13 +91,18 @@ services:
       - "8088:8088"
     environment:
       - DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator_db
-      - SSH_ENABLED=false
+      - SSH_ENABLED=true          
+      - SSH_USER=ubuntu
+      - SSH_PASSWORD= 
+      - SSH_KEY_PATH=/root/.ssh/id_ecdsa
       - CLUSTER_TYPE=linux
       - BASE_IMAGE_PATH=/mnt/storage/base/
       - INSTANCE_IMAGE_PATH=/mnt/storage/instances/
     volumes:
       - ./storage_mock/base:/mnt/storage/base/
       - ./storage_mock/instances:/mnt/storage/instances/
+      - ~/.ssh/id_ecdsa:/root/.ssh/id_ecdsa:ro
+
     depends_on:
       - postgres
     restart: unless-stopped
