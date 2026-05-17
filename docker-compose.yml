@@ -1,64 +1,86 @@
-version: '3.8'
+version: '3.9'
 
 services:
   postgres:
     image: postgres:16
-    container_name: orchestrator-db-local
-    ports:
-      - "5432:5432"
+    container_name: orchestrator-db
     environment:
       POSTGRES_USER: orchestrator
       POSTGRES_PASSWORD: orchestrator
       POSTGRES_DB: orchestrator_db
+    ports:
+      - "5432:5432"
     volumes:
       - ./db/init_schema.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U orchestrator"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
+      - pgdata:/var/lib/postgresql/data
 
   auth:
-    build: ./auth
+    build:
+      context: ./auth
+      dockerfile: Dockerfile
     container_name: orchestrator-auth
     ports:
       - "8081:8081"
     environment:
       - DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator_db
-      - SECRET_KEY=supersecretkey_change_in_production
     depends_on:
       - postgres
-    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: orchestrator-gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      - auth
+    environment:
+      - JWT_SECRET=supersecretkey_orchestrator
+      - AUTH_URL=http://auth:8081/auth
+
+  vm-placement:
+    build: ./vm-placement
+    container_name: vm-placement
+    ports:
+      - "8086:8086"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator_db
+    depends_on:
+      - postgres
 
   image-manager:
-    build: ./image-manager
+    build:
+      context: ./image-manager
+      dockerfile: Dockerfile
     container_name: orchestrator-image-manager
     ports:
       - "8083:8083"
     environment:
       - IMAGE_BASE_PATH=/mnt/storage/base/
-      - INSTANCE_BASE_PATH=/mnt/storage/instances/
+      - IMAGE_INSTANCES_PATH=/mnt/storage/instances/
     volumes:
-      - ./storage_mock/base:/mnt/storage/base/
-      - ./storage_mock/instances:/mnt/storage/instances/
-    restart: unless-stopped
+      - /mnt/storage:/mnt/storage
 
   monitoring:
-    build: ./monitoring
+    build:
+      context: ./monitoring
+      dockerfile: Dockerfile
     container_name: orchestrator-monitoring
     ports:
       - "8084:8084"
     environment:
       - DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator_db
-      - SECRET_KEY=supersecretkey_change_in_production
-      - SSH_ENABLED=false
+      - SSH_ENABLED=true
     depends_on:
       - postgres
-    restart: unless-stopped
+    volumes:
+      - ~/.ssh:/root/.ssh:ro
 
   networking:
-    build: ./networking
+    build:
+      context: ./networking
+      dockerfile: Dockerfile
     container_name: orchestrator-networking
     ports:
       - "8085:8085"
@@ -66,60 +88,68 @@ services:
       - DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator_db
     depends_on:
       - postgres
-    restart: unless-stopped
 
   slice-manager:
-    build: ./slice-manager
+    build:
+      context: ./slice-manager
+      dockerfile: Dockerfile
     container_name: orchestrator-slice-manager
     ports:
       - "8082:8082"
     environment:
       - DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator_db
-      - SECRET_KEY=supersecretkey_change_in_production
       - IMAGE_MANAGER_URL=http://image-manager:8083
       - NETWORKING_URL=http://networking:8085
+      - PLACEMENT_URL=http://vm-placement:8086
     depends_on:
       - postgres
       - image-manager
       - networking
-    restart: unless-stopped
-
-  driver:
-    build: ./driver
-    container_name: orchestrator-driver
-    ports:
-      - "8088:8088"
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator_db
-      - SSH_ENABLED=true          
-      - SSH_USER=ubuntu
-      - SSH_PASSWORD= 
-      - SSH_KEY_PATH=/root/.ssh/id_ecdsa
-      - CLUSTER_TYPE=linux
-      - BASE_IMAGE_PATH=/mnt/storage/base/
-      - INSTANCE_IMAGE_PATH=/mnt/storage/instances/
-    volumes:
-      - ./storage_mock/base:/mnt/storage/base/
-      - ./storage_mock/instances:/mnt/storage/instances/
-      - ~/.ssh/id_ecdsa:/root/.ssh/id_ecdsa:ro
-
-    depends_on:
-      - postgres
-    restart: unless-stopped
+      - vm-placement
 
   dispatcher:
-    build: ./dispatcher
+    build:
+      context: ./dispatcher
+      dockerfile: Dockerfile
     container_name: orchestrator-dispatcher
     ports:
       - "8087:8087"
     environment:
       - DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator_db
-      - DRIVER_URL=http://driver:8088/driver/execute
-      - POLL_INTERVAL=5
-      - STUCK_TIMEOUT_MINUTES=10
+      - DRIVER_URL=http://driver:8088
+      - NETWORKING_URL=http://networking:8085
+      - POLL_INTERVAL_SECONDS=5
+      - STALE_TIMEOUT_MINUTES=10
     depends_on:
-      postgres:
-        condition: service_healthy
-      driver:
-        condition: service_started
-    restart: unless-stopped
+      - postgres
+      - driver
+      - networking
+
+  driver:
+    build:
+      context: ./driver
+      dockerfile: Dockerfile
+    container_name: orchestrator-driver
+    ports:
+      - "8088:8088"
+    environment:
+      - NETWORKING_URL=http://networking:8085
+      - SSH_ENABLED=true
+    depends_on:
+      - networking
+    volumes:
+      - ~/.ssh:/root/.ssh:ro
+      - /mnt/storage:/mnt/storage
+
+  frontend:
+    image: nginx:alpine
+    container_name: orchestrator-frontend
+    ports:
+      - "3000:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    depends_on:
+      - api-gateway
+
+volumes:
+  pgdata:
