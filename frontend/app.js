@@ -780,6 +780,54 @@ async function tdSubmit() {
   } catch(e) { toast(e.message,'error'); }
 }
 
+// ── Topology SVG preview (read-only) ─────────────────────────
+function renderTopoSVG(vms, topology) {
+  if (!vms || vms.length === 0) return '';
+  const W = 480, H = 240, cx = W / 2, cy = H / 2;
+  const r = vms.length === 1 ? 0 : Math.min(W, H) * 0.36;
+  const STATUS_COLOR = {
+    READY: '#22c55e', ACTIVE: '#22c55e',
+    IN_PROGRESS: '#06b6d4', PENDING: '#f59e0b',
+    PENDING_APPROVAL: '#94a3b8', FAILED: '#ef4444',
+  };
+
+  const pos = {};
+  vms.forEach((vm, i) => {
+    const angle = (2 * Math.PI * i / vms.length) - Math.PI / 2;
+    pos[vm.name] = { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle), status: vm.status };
+  });
+
+  const lines = (topology || []).map(link => {
+    const a = pos[link.vm_a], b = pos[link.vm_b];
+    if (!a || !b) return '';
+    return `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"
+              stroke="rgba(139,92,246,0.55)" stroke-width="1.8"/>`;
+  }).join('');
+
+  const nodes = vms.map(vm => {
+    const p = pos[vm.name];
+    const color = STATUS_COLOR[vm.status] || '#94a3b8';
+    return `
+      <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="22"
+              fill="#0d1525" stroke="${color}" stroke-width="1.8"/>
+      <text x="${p.x.toFixed(1)}" y="${p.y.toFixed(1)}"
+            text-anchor="middle" dominant-baseline="middle"
+            font-size="10" font-weight="600"
+            font-family="SFMono-Regular,Consolas,monospace" fill="${color}">${vm.name}</text>`;
+  }).join('');
+
+  const hasLinks = (topology || []).length > 0;
+  const hint = !hasLinks
+    ? `<text x="${cx}" y="${H - 10}" text-anchor="middle" font-size="10"
+             font-family="sans-serif" fill="rgba(148,163,184,0.45)">Sin enlaces registrados</text>`
+    : '';
+
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;border-radius:6px">
+    <rect width="${W}" height="${H}" rx="6" fill="#0a0f1e"/>
+    ${lines}${nodes}${hint}
+  </svg>`;
+}
+
 // ── Slice detail modal ────────────────────────────────────────
 async function viewSliceDetail(id) {
   try {
@@ -809,12 +857,16 @@ async function viewSliceDetail(id) {
           </table></div>` : '<p class="text-muted text-sm">Sin interfaces asignadas aún.</p>'}
       </div>`).join('') || '<p class="text-muted text-sm">No hay VMs.</p>';
 
+    const topoSVG = renderTopoSVG(s.vms, s.topology);
     openModal(`Slice #${s.id} — ${s.name}`, `
       <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
         ${badge(s.status)}
         <span class="text-muted text-sm">ID: ${s.id}</span>
         ${s.vlan_slice ? `<span class="text-muted text-sm">VLAN-Slice: ${s.vlan_slice}</span>` : ''}
       </div>
+      ${topoSVG ? `
+        <div class="card-title" style="margin-bottom:8px">Topología</div>
+        <div style="margin-bottom:20px">${topoSVG}</div>` : ''}
       <div class="card-title" style="margin-bottom:12px">Máquinas Virtuales</div>
       ${vmsHTML}
     `);
