@@ -557,7 +557,7 @@ function tdAddVM() {
   const id = TD.nextVmId++;
   TD.vms.push({
     id, name:`VM${id}`,
-    base_image:'ubuntu-22.04.qcow2', ram:1024, vcpu:1,
+    base_image:'', ram:1024, vcpu:1,
     x: 80 + Math.random()*(W-160),
     y: 60 + Math.random()*(H-120),
   });
@@ -603,7 +603,7 @@ function tdRenderProps() {
         <input type="text" value="${vm.name}" oninput="tdUpdateVm(${vm.id},'name',this.value)" /></div>
       <div class="field"><label>Imagen base</label>
         <select id="td-img-${vm.id}" onchange="tdUpdateVm(${vm.id},'base_image',this.value)">
-          <option value="${vm.base_image}">${vm.base_image}</option>
+          <option value="" disabled selected>Cargando...</option>
         </select></div>
       <div class="field-row">
         <div class="field"><label>RAM (MB)</label>
@@ -619,8 +619,6 @@ function tdRenderProps() {
     const vB = TD.vms.find(v=>v.id===link.vmB)?.name||'?';
     panel.innerHTML = `
       <div class="card-title">Enlace</div>
-      <div class="field"><label>Nombre de la red</label>
-        <input type="text" value="${link.name}" oninput="tdUpdateLink(${link.id},'name',this.value)" /></div>
       <p class="text-muted text-sm" style="margin-top:6px">${vA} ↔ ${vB}</p>`;
   } else {
     panel.innerHTML = `<div class="card-title">Propiedades</div>
@@ -1169,14 +1167,21 @@ async function tdLoadImages(vmId, currentImage) {
   try {
     const data = await api('GET', '/images/');
     const images = data.images || [];
+    if (!images.length) {
+      sel.innerHTML = `<option value="" disabled selected>No hay imágenes disponibles</option>`;
+      return;
+    }
+    const validCurrent = images.find(img => img.name === currentImage);
+    const selected = validCurrent ? currentImage : images[0].name;
     sel.innerHTML = images.map(img =>
-      `<option value="${img.name}" ${img.name === currentImage ? 'selected' : ''}>${img.name}</option>`
+      `<option value="${img.name}" ${img.name === selected ? 'selected' : ''}>${img.name}</option>`
     ).join('');
-    if (!images.find(img => img.name === currentImage)) {
-      sel.insertAdjacentHTML('afterbegin', `<option value="${currentImage}" selected>${currentImage}</option>`);
+    if (selected !== currentImage) {
+      const vm = TD.vms.find(v => v.id === vmId);
+      if (vm) vm.base_image = selected;
     }
   } catch {
-    sel.innerHTML = `<option value="${currentImage}">${currentImage}</option>`;
+    sel.innerHTML = `<option value="" disabled selected>Error al cargar imágenes</option>`;
   }
 }
 
