@@ -248,7 +248,14 @@ class DriverService:
         # 3.5. Remove dynamically generated seed.iso from NFS if exists
         commands.append(f"sudo rm -f /mnt/storage/instances/{req.vm.name}-seed.iso")
 
-        # 5 y 6. Delete veth-ports and bridge ONLY if it's the last VM of the slice
+        # 5. Remove NAT rules for interfaces with internet_access
+        for iface in req.interfaces:
+            if getattr(iface, "internet_access", False):
+                commands.append(
+                    f"sudo iptables -t nat -D POSTROUTING -s {iface.ip_address} -o ens4 -j MASQUERADE 2>/dev/null || true"
+                )
+
+        # 6 y 7. Delete veth-ports and bridge ONLY if it's the last VM of the slice
         veth_wk = f"veth-wk-{req.slice.id}"
         veth_sl = f"veth-sl-{req.slice.id}"
         commands.append(
