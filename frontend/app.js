@@ -309,6 +309,7 @@ function renderNewSlice() {
               </button>
               <div style="width:1px;height:20px;background:var(--border)"></div>
               <button class="btn btn-ghost btn-sm" onclick="tdAddVM()">+ VM</button>
+              <button class="btn btn-ghost btn-sm" onclick="tdOpenTopoModal()">Plantilla</button>
               <button class="btn btn-danger btn-sm" onclick="tdDeleteSelected()">Eliminar</button>
             </div>
             <button class="btn btn-primary" onclick="tdSubmit()">Enviar solicitud</button>
@@ -340,6 +341,34 @@ function renderNewSlice() {
             <div><b style="color:var(--text-muted)">Editar</b> — selecciona una VM</div>
             <div><b style="color:var(--text-muted)">Borrar</b> — selecciona + Eliminar</div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal topología predefinida -->
+    <div id="td-topo-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.65);
+         z-index:1000;align-items:center;justify-content:center">
+      <div class="card" style="width:320px;margin:0;padding:20px 24px;gap:14px;display:flex;flex-direction:column">
+        <div class="card-title" style="margin-bottom:0">Topología predefinida</div>
+        <div class="field" style="margin:0">
+          <label>Tipo</label>
+          <select id="td-topo-type" style="width:100%">
+            <option value="ring">Anillo — cada VM conectada a la siguiente en círculo</option>
+            <option value="star">Estrella — un hub central conectado a todos los nodos</option>
+            <option value="line">Lineal — VMs en cadena de extremo a extremo</option>
+          </select>
+        </div>
+        <div class="field" style="margin:0">
+          <label>Número de VMs</label>
+          <input type="number" id="td-topo-n" value="4" min="2" max="20"
+                 style="width:100%;box-sizing:border-box" />
+        </div>
+        <p class="text-muted text-sm" style="margin:0">
+          Las VMs generadas usan los valores por defecto. Puedes editarlas individualmente y seguir añadiendo VMs o enlaces después.
+        </p>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn btn-ghost btn-sm" onclick="tdCloseTopoModal()">Cancelar</button>
+          <button class="btn btn-primary btn-sm" onclick="tdApplyTemplate()">Aplicar</button>
         </div>
       </div>
     </div>`;
@@ -576,6 +605,82 @@ function tdDeleteSelected() {
   }
   TD.selected = null;
   tdRenderProps(); tdUpdateSummary();
+}
+
+// ── Predefined topology generators ───────────────────────────
+function tdOpenTopoModal()  { document.getElementById('td-topo-modal').style.display = 'flex'; }
+function tdCloseTopoModal() { document.getElementById('td-topo-modal').style.display = 'none'; }
+
+function tdApplyTemplate() {
+  const type = document.getElementById('td-topo-type').value;
+  const n    = parseInt(document.getElementById('td-topo-n').value, 10);
+  const canvas = document.getElementById('td-canvas');
+  const W = canvas?.width || 600, H = canvas?.height || 400;
+
+  if (type === 'ring' && n < 3) { toast('Anillo requiere mínimo 3 VMs', 'error'); return; }
+  if (type === 'star' && n < 3) { toast('Estrella requiere mínimo 3 VMs', 'error'); return; }
+  if (type === 'line' && n < 2) { toast('Lineal requiere mínimo 2 VMs', 'error'); return; }
+  if (n > 20) { toast('Máximo 20 VMs por plantilla', 'error'); return; }
+
+  let result;
+  if (type === 'ring') result = tdGenerateRing(n, W, H);
+  else if (type === 'star') result = tdGenerateStar(n, W, H);
+  else result = tdGenerateLine(n, W, H);
+
+  TD.vms.push(...result.vms);
+  TD.links.push(...result.links);
+  TD.selected = null;
+  tdRenderProps(); tdUpdateSummary(); tdCloseTopoModal();
+  toast(`Plantilla aplicada: ${result.vms.length} VMs, ${result.links.length} enlaces`, 'success');
+}
+
+function tdGenerateRing(n, W, H) {
+  const cx = W / 2, cy = H / 2, r = Math.min(W, H) * 0.34;
+  const vms = [], links = [];
+  for (let i = 0; i < n; i++) {
+    const angle = (2 * Math.PI * i / n) - Math.PI / 2;
+    const id = TD.nextVmId++;
+    vms.push({ id, name: `VM${id}`, base_image: '', ram: 1024, vcpu: 1,
+      x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+  }
+  for (let i = 0; i < n; i++) {
+    const id = TD.nextLinkId++;
+    links.push({ id, name: `link-${id}`, vmA: vms[i].id, vmB: vms[(i + 1) % n].id });
+  }
+  return { vms, links };
+}
+
+function tdGenerateStar(n, W, H) {
+  const cx = W / 2, cy = H / 2, r = Math.min(W, H) * 0.34;
+  const vms = [], links = [];
+  const hubId = TD.nextVmId++;
+  vms.push({ id: hubId, name: `VM${hubId}`, base_image: '', ram: 1024, vcpu: 1, x: cx, y: cy });
+  const spokes = n - 1;
+  for (let i = 0; i < spokes; i++) {
+    const angle = (2 * Math.PI * i / spokes) - Math.PI / 2;
+    const id = TD.nextVmId++;
+    vms.push({ id, name: `VM${id}`, base_image: '', ram: 1024, vcpu: 1,
+      x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+    const lid = TD.nextLinkId++;
+    links.push({ id: lid, name: `link-${lid}`, vmA: hubId, vmB: id });
+  }
+  return { vms, links };
+}
+
+function tdGenerateLine(n, W, H) {
+  const margin = 90, cy = H / 2;
+  const step = n > 1 ? (W - margin * 2) / (n - 1) : 0;
+  const vms = [], links = [];
+  for (let i = 0; i < n; i++) {
+    const id = TD.nextVmId++;
+    vms.push({ id, name: `VM${id}`, base_image: '', ram: 1024, vcpu: 1,
+      x: margin + i * step, y: cy });
+    if (i > 0) {
+      const lid = TD.nextLinkId++;
+      links.push({ id: lid, name: `link-${lid}`, vmA: vms[i - 1].id, vmB: id });
+    }
+  }
+  return { vms, links };
 }
 
 function tdSetMode(mode) {
@@ -1347,7 +1452,8 @@ Object.assign(window, {
   renderImages, uploadImage, deleteImage,
   // topology designer
   tdSetMode, tdAddVM, tdDeleteSelected, tdSubmit,
-  tdUpdateVm, tdUpdateLink,tdLoadImages,
+  tdUpdateVm, tdUpdateLink, tdLoadImages,
+  tdOpenTopoModal, tdCloseTopoModal, tdApplyTemplate,
   createUser, nuToggleAdmin,
 });
 
