@@ -119,7 +119,7 @@ class DispatcherService:
                 "base_image": vm.base_image,
                 "ram": vm.ram,
                 "vcpu": vm.vcpu,
-                "instance_path": payload.get("instance_path", f"/mnt/storage/instances/{vm.id}.qcow2"),
+                "instance_path": payload.get("instance_path", f"/mnt/storage/instances/{vm.id}.qcow2")
             },
             "slice": {
                 "id": slice_obj.id,
@@ -130,11 +130,9 @@ class DispatcherService:
                     "interface_name": iface.get("interface_name", ""),
                     "tap_name": iface.get("tap_name", ""),
                     "vlan_inner": iface.get("vlan_inner", 0),
-                    "ip_address": iface.get("ip_address", ""),
                     "mac_address": iface.get("mac_address", ""),
-                    "bridge_name": bridge_name,
+                    "bridge_name": iface.get("bridge_name") or bridge_name,
                     "is_remote": iface.get("is_remote", False),
-                    "internet_access": iface.get("internet_access", False),
                 }
                 for iface in payload.get("interfaces", [])
             ],
@@ -184,19 +182,20 @@ class DispatcherService:
 
         interfaces_payload = []
         for iface in ifaces:
-            net_res = await db.execute(
-                select(Network).where(Network.id == iface.network_id)
-            )
-            net = net_res.scalar_one_or_none()
+            net = None
+            if iface.network_id:
+                net_res = await db.execute(
+                    select(Network).where(Network.id == iface.network_id)
+                )
+                net = net_res.scalar_one_or_none()
             interfaces_payload.append({
                 "interface_name": iface.interface_name,
                 "tap_name": iface.tap_name,
                 "vlan_inner": net.vlan_inner if net else 0,
-                "ip_address": iface.ip_address,
                 "mac_address": iface.mac_address,
                 "network_id": iface.network_id,
+                "bridge_name": iface.bridge_name or f"br-sl-{slice_obj.id}",
                 "is_remote": net.is_remote if net else False,
-                "internet_access": net.internet_access if net else False,
             })
 
         instance_path = f"/mnt/storage/instances/{vm.id}.qcow2"
@@ -230,16 +229,17 @@ class DispatcherService:
         topology = slice_obj.topology or []
         networking_links = []
         for i, link in enumerate(topology):
-            vm_a_id = vm_name_to_id.get(link.get("vm_a"))
-            vm_b_id = vm_name_to_id.get(link.get("vm_b"))
-            if vm_a_id and vm_b_id:
+            vm_a_name = str(link.get("vm_a", "")).upper()
+            vm_b_name = str(link.get("vm_b", "")).upper()
+            vm_a_id = 0 if vm_a_name in ("INTERNET", "INET", "WAN", "EXTERNAL") else vm_name_to_id.get(link.get("vm_a"))
+            vm_b_id = 0 if vm_b_name in ("INTERNET", "INET", "WAN", "EXTERNAL") else vm_name_to_id.get(link.get("vm_b"))
+            if vm_a_id is not None and vm_b_id is not None:
                 networking_links.append({
                     "link_name": f"link_{i}",
                     "vm_a_id": vm_a_id,
                     "iface_a": link.get("iface_a", "eth0"),
                     "vm_b_id": vm_b_id,
                     "iface_b": link.get("iface_b", "eth0"),
-                    "internet_access": link.get("internet_access", False),
                 })
 
         payload = {

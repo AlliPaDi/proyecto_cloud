@@ -47,10 +47,10 @@ class SliceListResponse(BaseModel):
     slices: List[SliceListResponseItem]
 
 class VmInterfaceDetail(BaseModel):
-    interface_name: Optional[str]
-    ip_address: Optional[str]
-    tap_name: Optional[str]
-    vlan_inner: Optional[int]
+    interface_name: Optional[str] = None
+    tap_name: Optional[str] = None
+    vlan_inner: Optional[int] = None
+    bridge_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -72,7 +72,6 @@ class SliceDetailResponse(BaseModel):
     name: str
     status: str
     vlan_slice: Optional[int]
-    topology: Optional[list] = None
     vms: List[VMDetail]
 
     class Config:

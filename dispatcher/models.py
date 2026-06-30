@@ -49,9 +49,7 @@ class Network(Base):
     id = Column(Integer, primary_key=True)
     slice_id = Column(Integer, ForeignKey("slices.id", ondelete="CASCADE"))
     vlan_inner = Column(Integer, nullable=False)
-    subnet_cidr = Column(String(18))
     is_remote = Column(Boolean, default=False)
-    internet_access = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -59,11 +57,11 @@ class VmInterface(Base):
     __tablename__ = "vm_interfaces"
     id = Column(Integer, primary_key=True)
     vm_id = Column(Integer, ForeignKey("virtual_machines.id", ondelete="CASCADE"))
-    network_id = Column(Integer, ForeignKey("networks.id", ondelete="CASCADE"))
+    network_id = Column(Integer, ForeignKey("networks.id", ondelete="CASCADE"), nullable=True)
     mac_address = Column(String(17))
-    ip_address = Column(String(15))
     interface_name = Column(String(20))
     tap_name = Column(String(30))
+    bridge_name = Column(String(30), nullable=True)
 
 
 class Task(Base):

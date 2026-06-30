@@ -177,9 +177,9 @@ async def get_slice(
             net = net_res.scalar_one_or_none()
             interfaces.append(schemas.VmInterfaceDetail(
                 interface_name=iface.interface_name,
-                ip_address=iface.ip_address,
                 tap_name=iface.tap_name,
-                vlan_inner=net.vlan_inner if net else None
+                vlan_inner=net.vlan_inner if net else 0,
+                bridge_name=iface.bridge_name or (f"br-sl-{slice_obj.id}" if net else "br-inet")
             ))
             
         vms.append(schemas.VMDetail(
@@ -197,7 +197,6 @@ async def get_slice(
         name=slice_obj.name,
         status=slice_obj.status,
         vlan_slice=slice_obj.vlan_slice,
-        topology=slice_obj.topology or [],
         vms=vms
     )
 
@@ -249,11 +248,19 @@ async def approve_slice(
             task_type="CREATE_VM",
             status="PENDING",
             payload={
-                "vm_name": vm.name,
-                "base_image": vm.base_image,
-                "ram": vm.ram,
-                "vcpu": vm.vcpu,
-                "slice_id": slice_obj.id
+                "vm": {
+                    "id": vm.id,
+                    "name": vm.name,
+                    "base_image": vm.base_image,
+                    "ram": vm.ram,
+                    "vcpu": vm.vcpu,
+                    "instance_path": ""
+                },
+                "slice": {
+                    "id": slice_obj.id,
+                    "vlan_slice": 0
+                },
+                "interfaces": []
             }
         )
         db.add(task)
@@ -298,16 +305,17 @@ async def approve_slice(
         vm_name_to_id = {vm.name: vm.id for vm in vms_updated}
         networking_links = []
         for i, link in enumerate(topology_links):
-            vm_a_id = vm_name_to_id.get(link.get("vm_a"))
-            vm_b_id = vm_name_to_id.get(link.get("vm_b"))
-            if vm_a_id and vm_b_id:
+            vm_a_name = str(link.get("vm_a", "")).upper()
+            vm_b_name = str(link.get("vm_b", "")).upper()
+            vm_a_id = 0 if vm_a_name in ("INTERNET", "INET", "WAN", "EXTERNAL") else vm_name_to_id.get(link.get("vm_a"))
+            vm_b_id = 0 if vm_b_name in ("INTERNET", "INET", "WAN", "EXTERNAL") else vm_name_to_id.get(link.get("vm_b"))
+            if vm_a_id is not None and vm_b_id is not None:
                 networking_links.append({
                     "link_name": f"link_{i}",
                     "vm_a_id": vm_a_id,
                     "iface_a": link.get("iface_a", "eth0"),
                     "vm_b_id": vm_b_id,
-                    "iface_b": link.get("iface_b", "eth0"),
-                    "internet_access": link.get("internet_access", False)
+                    "iface_b": link.get("iface_b", "eth0")
                 })
 
         networking_payload = {
@@ -363,11 +371,10 @@ async def approve_slice(
                 "interface_name": iface.interface_name,
                 "tap_name": iface.tap_name,
                 "vlan_inner": net.vlan_inner if net else 0,
-                "ip_address": iface.ip_address,
                 "mac_address": iface.mac_address,
+                "bridge_name": iface.bridge_name or (f"br-sl-{slice_obj.id}" if net else "br-inet"),
                 "network_id": iface.network_id,
-                "is_remote": net.is_remote if net else False,
-                "internet_access": net.internet_access if net else False
+                "is_remote": net.is_remote if net else False
             })
 
         instance_path = f"/mnt/storage/instances/{vm.id}.qcow2"
@@ -450,20 +457,13 @@ async def delete_slice(
     db: AsyncSession = Depends(get_db)
 ):
     user = await get_current_user(x_user_role, x_user_id, db)
-
-    if user.role not in ("SLICE_ADMIN", "SYSTEM_ADMIN"):
-        raise HTTPException(status_code=403, detail="Only SLICE_ADMIN or SYSTEM_ADMIN can delete slices")
-
     result = await db.execute(select(models.Slice).options(selectinload(models.Slice.vms), selectinload(models.Slice.networks)).where(models.Slice.id == id))
     slice_obj = result.scalar_one_or_none()
     if not slice_obj:
         raise HTTPException(status_code=404, detail="Slice not found")
 
-    if user.role == "SLICE_ADMIN":
-        student_res = await db.execute(select(models.User).where(models.User.id == slice_obj.user_id))
-        student = student_res.scalar_one_or_none()
-        if not student or student.admin_id != user.id:
-            raise HTTPException(status_code=403, detail="Not authorized to delete this student's slice")
+    if user.role == "STUDENT" and slice_obj.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
 
     vms_count = len(slice_obj.vms)
     networks_count = len(slice_obj.networks)
@@ -495,11 +495,9 @@ async def delete_slice(
                     "interface_name": iface.interface_name,
                     "tap_name": iface.tap_name,
                     "vlan_inner": net.vlan_inner if net else 0,
-                    "ip_address": iface.ip_address,
                     "mac_address": iface.mac_address,
-                    "bridge_name": f"br-sl-{id}",
-                    "is_remote": net.is_remote if net else False,
-                    "internet_access": net.internet_access if net else False
+                    "bridge_name": iface.bridge_name or (f"br-sl-{id}" if net else "br-inet"),
+                    "is_remote": net.is_remote if net else False
                 })
 
             driver_request = {

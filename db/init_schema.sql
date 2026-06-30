@@ -7,8 +7,8 @@ CREATE TABLE users (
     password_hash VARCHAR(255) NOT NULL,
     role VARCHAR(20) DEFAULT 'STUDENT', -- STUDENT, SLICE_ADMIN, SYSTEM_ADMIN
     admin_id INT REFERENCES users(id), -- Para asignar un STUDENT a un SLICE_ADMIN
-    quota_ram INT DEFAULT 8192, -- Cuota de RAM en MB
-    quota_cpu INT DEFAULT 8, -- Cuota de cores
+    quota_ram INT DEFAULT 4096, -- Cuota de RAM en MB
+    quota_cpu INT DEFAULT 4, -- Cuota de cores
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -62,9 +62,7 @@ CREATE TABLE networks (
     id SERIAL PRIMARY KEY,
     slice_id INT REFERENCES slices(id) ON DELETE CASCADE,
     vlan_inner INT NOT NULL, -- Vlan-Inner: etiqueta local dentro del Br-Slice (ej. 100, 200)
-    subnet_cidr VARCHAR(18), -- ej. '192.168.100.0/24' (IPAM)
     is_remote BOOLEAN DEFAULT FALSE, -- TRUE si las VMs del enlace están en Workers distintos
-    internet_access BOOLEAN DEFAULT FALSE, -- TRUE habilita NAT/MASQUERADE para salida a Internet
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -72,11 +70,11 @@ CREATE TABLE networks (
 CREATE TABLE vm_interfaces (
     id SERIAL PRIMARY KEY,
     vm_id INT REFERENCES virtual_machines(id) ON DELETE CASCADE,
-    network_id INT REFERENCES networks(id) ON DELETE CASCADE,
+    network_id INT REFERENCES networks(id) ON DELETE CASCADE NULL,
     mac_address VARCHAR(17),
-    ip_address VARCHAR(15), -- IP asignada en esa red (IPAM y Dashboards)
     interface_name VARCHAR(20), -- ej. 'eth0', 'eth1' dentro del guest (VM)
-    tap_name VARCHAR(30) -- ej. 'tap-vm1-eth0' en el host Worker para OvS
+    tap_name VARCHAR(30), -- ej. 'tap-vm1-eth0' en el host Worker para OvS
+    bridge_name VARCHAR(30)
 );
 
 CREATE TABLE tasks (
@@ -92,19 +90,7 @@ CREATE TABLE tasks (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Reglas de seguridad entre VMs dentro de un slice (enforcement via OpenFlow en OvS)
-CREATE TABLE security_rules (
-    id SERIAL PRIMARY KEY,
-    slice_id INT REFERENCES slices(id) ON DELETE CASCADE,
-    src_vm_id INT REFERENCES virtual_machines(id) ON DELETE CASCADE,
-    dst_vm_id INT REFERENCES virtual_machines(id) ON DELETE CASCADE,
-    protocol VARCHAR(10) DEFAULT 'any',   -- tcp, udp, icmp, any
-    port_min INT,                         -- NULL = cualquier puerto
-    port_max INT,
-    action VARCHAR(10) DEFAULT 'ALLOW',   -- ALLOW, DENY
-    priority INT DEFAULT 100,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+
 
 -- Tabla de configuración clave-valor para estado persistente de los módulos
 -- Ej: el puntero Round Robin del VM Placement ('last_worker_id' -> '2')

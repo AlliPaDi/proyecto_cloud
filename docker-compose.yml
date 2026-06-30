@@ -1,4 +1,4 @@
-version: '3.9'
+version: '3.8'
 
 services:
   postgres:
@@ -135,21 +135,12 @@ services:
     environment:
       - NETWORKING_URL=http://networking:8085
       - SSH_ENABLED=true
+      - SSH_BASTION_HOST=192.168.203.4
     depends_on:
       - networking
     volumes:
       - ~/.ssh:/root/.ssh:ro
       - /mnt/storage:/mnt/storage
-
-  frontend:
-    image: nginx:alpine
-    container_name: orchestrator-frontend
-    ports:
-      - "3000:80"
-    volumes:
-      - ./frontend:/usr/share/nginx/html:ro
-    depends_on:
-      - api-gateway
 
 volumes:
   pgdata:
