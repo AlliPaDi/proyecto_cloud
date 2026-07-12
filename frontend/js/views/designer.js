@@ -42,6 +42,9 @@ function renderNewSlice() {
     target: 'linux',        // 'linux' | 'openstack'
     flavors: [],            // catálogo /flavors/ (linux)
     images: [],             // catálogo /images/ (linux)
+    osFlavors: [],          // catálogo /openstack/flavors (Nova)
+    osImages: [],           // catálogo /openstack/images (Glance)
+    osCatalogsLoaded: false,
   };
 
   const targetSelector = tdIsAdmin() ? `
@@ -145,11 +148,15 @@ function renderNewSlice() {
         <div id="td-topo-os-fields" style="display:none">
           <div class="field" style="margin:0 0 10px">
             <label>Imagen (Glance)</label>
-            <input type="text" id="td-topo-os-img" placeholder="ej. cirros-0.6.2" style="width:100%;box-sizing:border-box" />
+            <select id="td-topo-os-img" style="width:100%">
+              <option value="" disabled selected>Selecciona una imagen</option>
+            </select>
           </div>
           <div class="field" style="margin:0">
             <label>Flavor (Nova)</label>
-            <input type="text" id="td-topo-os-flavor" placeholder="ej. m1.tiny" style="width:100%;box-sizing:border-box" />
+            <select id="td-topo-os-flavor" style="width:100%">
+              <option value="" disabled selected>Selecciona un flavor</option>
+            </select>
           </div>
         </div>
         <p class="text-muted text-sm" style="margin:0">
@@ -182,10 +189,27 @@ function tdSetTarget(target) {
   TD.target = target;
   const btn = document.getElementById('btn-td-submit');
   if (btn) btn.textContent = tdSubmitLabel(target);
+  if (target === 'openstack' && !TD.osCatalogsLoaded) tdLoadOSCatalogs();
   tdRenderProps();
   tdSetHint(target === 'openstack'
     ? 'Destino OpenStack: se crea directo, sin aprobación'
     : (tdIsAdmin() ? 'Destino Linux: se crea directo, sin aprobación' : ''));
+}
+
+// Carga catálogos de OpenStack (Nova/Glance) una sola vez, bajo demanda
+async function tdLoadOSCatalogs() {
+  TD.osCatalogsLoaded = true;
+  try {
+    const [flavs, imgs] = await Promise.allSettled([
+      api('GET', '/openstack/flavors'),
+      api('GET', '/openstack/images'),
+    ]);
+    if (flavs.status === 'fulfilled') TD.osFlavors = flavs.value.flavors || [];
+    if (imgs.status === 'fulfilled')  TD.osImages  = imgs.value.images || [];
+  } catch { /* los selects mostrarán "sin datos" */ }
+  tdRenderProps();
+  const modal = document.getElementById('td-topo-modal');
+  if (modal && modal.style.display !== 'none') tdOpenTopoModal();
 }
 
 // ── Canvas init + interacción ─────────────────────────────────
@@ -454,6 +478,19 @@ function tdOpenTopoModal() {
       ? `<option value="" disabled selected>Selecciona un flavor</option>` +
         TD.flavors.map(f => `<option value="${f.id}">${esc(f.name)} — ${f.ram}MB/${f.vcpu}vCPU/${f.disk}GB</option>`).join('')
       : `<option value="" disabled selected>No hay flavors disponibles</option>`;
+  } else {
+    if (!TD.osCatalogsLoaded) tdLoadOSCatalogs();
+    const selImg = document.getElementById('td-topo-os-img');
+    selImg.innerHTML = TD.osImages.length
+      ? `<option value="" disabled selected>Selecciona una imagen</option>` +
+        TD.osImages.map(img => `<option value="${esc(img.id)}">${esc(img.name)}</option>`).join('')
+      : `<option value="" disabled selected>${TD.osCatalogsLoaded ? 'No hay imágenes disponibles' : 'Cargando...'}</option>`;
+
+    const selFlav = document.getElementById('td-topo-os-flavor');
+    selFlav.innerHTML = TD.osFlavors.length
+      ? `<option value="" disabled selected>Selecciona un flavor</option>` +
+        TD.osFlavors.map(f => `<option value="${esc(f.id)}">${esc(f.name)} — ${f.ram}MB/${f.vcpus}vCPU/${f.disk}GB</option>`).join('')
+      : `<option value="" disabled selected>${TD.osCatalogsLoaded ? 'No hay flavors disponibles' : 'Cargando...'}</option>`;
   }
 }
 function tdCloseTopoModal() { document.getElementById('td-topo-modal').style.display = 'none'; }
@@ -573,17 +610,28 @@ function tdRenderProps() {
     }
 
     if (TD.target === 'openstack') {
+      const osImgOptions = TD.osImages.length
+        ? `<option value="" disabled ${!vm.base_image ? 'selected' : ''}>Selecciona una imagen</option>` +
+          TD.osImages.map(img =>
+            `<option value="${esc(img.id)}" ${img.id === vm.base_image ? 'selected' : ''}>${esc(img.name)}</option>`).join('')
+        : `<option value="" disabled selected>${TD.osCatalogsLoaded ? 'No hay imágenes disponibles' : 'Cargando...'}</option>`;
+
+      const osFlavOptions = TD.osFlavors.length
+        ? `<option value="" disabled ${!vm.flavor ? 'selected' : ''}>Selecciona un flavor</option>` +
+          TD.osFlavors.map(f =>
+            `<option value="${esc(f.id)}" ${f.id === vm.flavor ? 'selected' : ''}>${esc(f.name)} — ${f.ram}MB/${f.vcpus}vCPU/${f.disk}GB</option>`).join('')
+        : `<option value="" disabled selected>${TD.osCatalogsLoaded ? 'No hay flavors disponibles' : 'Cargando...'}</option>`;
+
+      const osFlav = TD.osFlavors.find(f => f.id === vm.flavor);
       panel.innerHTML = `
         <div class="card-title">${esc(vm.name)}</div>
         <div class="field"><label>Nombre</label>
           <input type="text" value="${esc(vm.name)}" oninput="tdUpdateVm(${vm.id},'name',this.value)" /></div>
         <div class="field"><label>Imagen (Glance)</label>
-          <input type="text" value="${esc(vm.base_image)}" placeholder="ej. cirros-0.6.2"
-                 oninput="tdUpdateVm(${vm.id},'base_image',this.value)" /></div>
+          <select onchange="tdUpdateVm(${vm.id},'base_image',this.value)">${osImgOptions}</select></div>
         <div class="field"><label>Flavor (Nova)</label>
-          <input type="text" value="${esc(vm.flavor)}" placeholder="ej. m1.tiny"
-                 oninput="tdUpdateVm(${vm.id},'flavor',this.value)" /></div>
-        <p class="text-muted text-xs" style="margin-top:6px">El flavor se valida contra Nova al crear el slice.</p>`;
+          <select onchange="tdUpdateVm(${vm.id},'flavor',this.value)">${osFlavOptions}</select></div>
+        ${osFlav ? `<p class="text-muted text-xs" style="margin-top:6px">RAM ${osFlav.ram} MB · ${osFlav.vcpus} vCPU · ${osFlav.disk} GB disco</p>` : ''}`;
       return;
     }
 
@@ -628,7 +676,7 @@ function tdUpdateVm(id, field, value) {
   const vm = TD.vms.find(v=>v.id===id);
   if (!vm) return;
   vm[field]=value;
-  if (field === 'flavor_id') tdRenderProps(); // refresca specs del flavor
+  if (field === 'flavor_id' || (field === 'flavor' && TD.target === 'openstack')) tdRenderProps(); // refresca specs del flavor
   tdUpdateSummary();
 }
 
@@ -639,7 +687,8 @@ function tdUpdateSummary() {
   const vmLines = realVms.map(v => {
     let spec;
     if (TD.target === 'openstack') {
-      spec = v.flavor || 'sin flavor';
+      const f = TD.osFlavors.find(fl => fl.id === v.flavor);
+      spec = f ? f.name : (v.flavor || 'sin flavor');
     } else {
       const f = TD.flavors.find(fl => fl.id === v.flavor_id);
       spec = f ? f.name : 'sin flavor';
