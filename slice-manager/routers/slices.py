@@ -27,11 +27,181 @@ async def get_current_user(x_user_role: str = Header(...), x_user_id: int = Head
     return user
 
 # ---------------------------------------------------------------------------
-# POST /slices/ — Crear solicitud (STUDENT)
+# Activa un slice "linux" ya persistido: crea tareas CREATE_VM, invoca
+# VM Placement y Networking, y enriquece los payloads. Deja el slice ACTIVE.
+# Reutilizado por /approve (flujo STUDENT) y por create_slice cuando el
+# creador es SLICE_ADMIN/SYSTEM_ADMIN (que no requieren aprobación).
 # ---------------------------------------------------------------------------
-# Flujo: Validar imágenes → Insertar slice + VMs en PENDING_APPROVAL
-#        → Guardar topología (links) como JSON para la fase de aprobación.
-#        NO se llama a Networking aquí (se hará tras el Placement en approve).
+async def _activate_linux_slice(slice_obj: models.Slice, db: AsyncSession):
+    tasks_created = 0
+    for vm in slice_obj.vms:
+        vm.status = "PENDING"
+        task = models.Task(
+            slice_id=slice_obj.id,
+            vm_id=vm.id,
+            task_type="CREATE_VM",
+            status="PENDING",
+            payload={
+                "vm": {
+                    "id": vm.id,
+                    "name": vm.name,
+                    "base_image": vm.base_image,
+                    "ram": vm.ram,
+                    "vcpu": vm.vcpu,
+                    "disk": vm.disk,
+                    "instance_path": ""
+                },
+                "slice": {
+                    "id": slice_obj.id,
+                    "vlan_slice": 0
+                },
+                "interfaces": []
+            }
+        )
+        db.add(task)
+        tasks_created += 1
+
+    # Commit para que VM Placement pueda ver las tareas PENDING
+    await db.commit()
+
+    placement_success = False
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            res = await client.post(f"{PLACEMENT_URL}/placement/trigger")
+            if res.status_code == 200:
+                placement_success = True
+        except httpx.RequestError:
+            pass  # Si Placement no responde, las tareas quedan en PENDING para el loop
+
+    await db.refresh(slice_obj)
+    vm_result = await db.execute(
+        select(models.VirtualMachine).where(models.VirtualMachine.slice_id == slice_obj.id)
+    )
+    vms_updated = vm_result.scalars().all()
+
+    placement_map = {}
+    all_placed = True
+    for vm in vms_updated:
+        if vm.worker_id:
+            placement_map[str(vm.id)] = vm.worker_id
+        else:
+            placement_map[str(vm.id)] = 0
+            all_placed = False
+
+    networking_response = None
+    topology_links = slice_obj.topology or []
+
+    if topology_links:
+        vm_name_to_id = {vm.name: vm.id for vm in vms_updated}
+        networking_links = []
+        for i, link in enumerate(topology_links):
+            vm_a_name = str(link.get("vm_a", "")).upper()
+            vm_b_name = str(link.get("vm_b", "")).upper()
+            vm_a_id = 0 if vm_a_name in ("INTERNET", "INET", "WAN", "EXTERNAL") else vm_name_to_id.get(link.get("vm_a"))
+            vm_b_id = 0 if vm_b_name in ("INTERNET", "INET", "WAN", "EXTERNAL") else vm_name_to_id.get(link.get("vm_b"))
+            if vm_a_id is not None and vm_b_id is not None:
+                networking_links.append({
+                    "link_name": f"link_{i}",
+                    "vm_a_id": vm_a_id,
+                    "iface_a": link.get("iface_a", "eth0"),
+                    "vm_b_id": vm_b_id,
+                    "iface_b": link.get("iface_b", "eth0")
+                })
+
+        networking_payload = {
+            "slice_id": slice_obj.id,
+            "placement_map": placement_map,
+            "links": networking_links
+        }
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                res = await client.post(f"{NETWORKING_URL}/networking/allocate", json=networking_payload)
+                if res.status_code == 200:
+                    networking_response = res.json()
+            except httpx.RequestError:
+                pass  # Networking se puede invocar después vía Dispatcher
+
+    vlan_slice = None
+    bridge_name = None
+    if networking_response:
+        vlan_slice = networking_response.get("vlan_slice")
+        bridge_name = networking_response.get("bridge_name")
+        slice_obj.vlan_slice = vlan_slice
+
+    tasks_res = await db.execute(
+        select(models.Task).where(
+            models.Task.slice_id == slice_obj.id,
+            models.Task.task_type == "CREATE_VM"
+        )
+    )
+    tasks = tasks_res.scalars().all()
+
+    for task in tasks:
+        vm = next((v for v in vms_updated if v.id == task.vm_id), None)
+        if not vm:
+            continue
+
+        ifaces_res = await db.execute(
+            select(models.VmInterface).where(models.VmInterface.vm_id == vm.id)
+        )
+        ifaces = ifaces_res.scalars().all()
+
+        interfaces_payload = []
+        for iface in ifaces:
+            net_res = await db.execute(
+                select(models.Network).where(models.Network.id == iface.network_id)
+            )
+            net = net_res.scalar_one_or_none()
+            interfaces_payload.append({
+                "interface_name": iface.interface_name,
+                "tap_name": iface.tap_name,
+                "vlan_inner": net.vlan_inner if net else 0,
+                "mac_address": iface.mac_address,
+                "bridge_name": iface.bridge_name or (f"br-sl-{slice_obj.id}" if net else "br-inet"),
+                "network_id": iface.network_id,
+                "is_remote": net.is_remote if net else False
+            })
+
+        instance_path = f"/mnt/storage/instances/{vm.id}.qcow2"
+        vm.instance_path = instance_path
+
+        task.payload = {
+            "vm_name": vm.name,
+            "base_image": vm.base_image,
+            "base_path": f"/mnt/storage/base/{vm.base_image}",
+            "instance_path": instance_path,
+            "ram": vm.ram,
+            "vcpu": vm.vcpu,
+            "disk": vm.disk,
+            "slice_id": slice_obj.id,
+            "vlan_slice": vlan_slice,
+            "bridge_name": bridge_name or f"br-sl-{slice_obj.id}",
+            "interfaces": interfaces_payload
+        }
+
+    slice_obj.status = "ACTIVE"
+    await db.commit()
+
+    msg_parts = [f"{tasks_created} tareas de tipo CREATE_VM generadas."]
+    if placement_success and all_placed:
+        msg_parts.append("Placement completado.")
+    elif not placement_success:
+        msg_parts.append("Placement pendiente (servicio no disponible, las tareas serán procesadas por el loop).")
+    if networking_response:
+        msg_parts.append(f"Networking asignado (Vlan-Slice: {vlan_slice}).")
+    else:
+        msg_parts.append("Networking pendiente (será asignado por el Dispatcher).")
+
+    return tasks_created, " ".join(msg_parts)
+
+# ---------------------------------------------------------------------------
+# POST /slices/ — Crear slice (STUDENT: solicitud; SLICE_ADMIN/SYSTEM_ADMIN: directo)
+# ---------------------------------------------------------------------------
+# Flujo: Validar imágenes → Insertar slice + VMs.
+#        STUDENT: queda en PENDING_APPROVAL (requiere aprobación de SLICE_ADMIN).
+#        SLICE_ADMIN/SYSTEM_ADMIN (target linux): se activa de inmediato
+#        (placement + networking), sin pasar por aprobación.
 # ---------------------------------------------------------------------------
 @router.post("/", response_model=schemas.SliceCreateResponse, status_code=201)
 async def create_slice(
@@ -66,7 +236,10 @@ async def create_slice(
     else:
         topology_data = [link.model_dump() for link in slice_in.links]
 
-    slice_status = "ACTIVE" if slice_in.iaas_target == "openstack" else "PENDING_APPROVAL"
+    # SLICE_ADMIN/SYSTEM_ADMIN no requieren aprobación: el slice linux se activa directo.
+    skip_approval = slice_in.iaas_target == "linux" and user.role in ["SLICE_ADMIN", "SYSTEM_ADMIN"]
+    create_active = slice_in.iaas_target == "openstack" or skip_approval
+    slice_status = "ACTIVE" if create_active else "PENDING_APPROVAL"
     new_slice = models.Slice(
         user_id=user.id,
         name=slice_in.name,
@@ -80,7 +253,7 @@ async def create_slice(
     vm_records = {}
     async with httpx.AsyncClient() as client:
         for vm in slice_in.vms:
-            vm_status = "PENDING" if slice_in.iaas_target == "openstack" else "PENDING_APPROVAL"
+            vm_status = "PENDING" if create_active else "PENDING_APPROVAL"
             
             ram = 0
             vcpu = 0
@@ -231,6 +404,13 @@ async def create_slice(
                     status_code=503,
                     detail=f"VM Placement service is unavailable: {str(e)}"
                 )
+
+    if skip_approval:
+        slice_result = await db.execute(
+            select(models.Slice).options(selectinload(models.Slice.vms)).where(models.Slice.id == new_slice.id)
+        )
+        new_slice = slice_result.scalar_one()
+        await _activate_linux_slice(new_slice, db)
 
     vms_response = [
         schemas.SliceResponseVM(id=vm_records[v].id, name=vm_records[v].name, status=vm_records[v].status)
@@ -490,182 +670,12 @@ async def approve_slice(
             tasks_created=tasks_created
         )
 
-    # --- Paso 1: Crear tareas en PENDING y cambiar VMs a PENDING ---
-    tasks_created = 0
-    for vm in slice_obj.vms:
-        vm.status = "PENDING"
-        task = models.Task(
-            slice_id=slice_obj.id,
-            vm_id=vm.id,
-            task_type="CREATE_VM",
-            status="PENDING",
-            payload={
-                "vm": {
-                    "id": vm.id,
-                    "name": vm.name,
-                    "base_image": vm.base_image,
-                    "ram": vm.ram,
-                    "vcpu": vm.vcpu,
-                    "disk": vm.disk,
-                    "instance_path": ""
-                },
-                "slice": {
-                    "id": slice_obj.id,
-                    "vlan_slice": 0
-                },
-                "interfaces": []
-            }
-        )
-        db.add(task)
-        tasks_created += 1
-
-    # Commit para que VM Placement pueda ver las tareas PENDING
-    await db.commit()
-
-    # --- Paso 2: Invocar VM Placement para asignar workers (Round Robin) ---
-    placement_success = False
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
-            res = await client.post(f"{PLACEMENT_URL}/placement/trigger")
-            if res.status_code == 200:
-                placement_success = True
-        except httpx.RequestError:
-            pass  # Si Placement no responde, las tareas quedan en PENDING para el loop
-
-    # --- Paso 3: Re-leer VMs con worker_id asignado ---
-    await db.refresh(slice_obj)
-    vm_result = await db.execute(
-        select(models.VirtualMachine).where(models.VirtualMachine.slice_id == slice_obj.id)
-    )
-    vms_updated = vm_result.scalars().all()
-
-    # Construir placement_map: {vm_id: worker_id}
-    placement_map = {}
-    all_placed = True
-    for vm in vms_updated:
-        if vm.worker_id:
-            placement_map[str(vm.id)] = vm.worker_id
-        else:
-            placement_map[str(vm.id)] = 0
-            all_placed = False
-
-    # --- Paso 4: Invocar Networking con placement_map real ---
-    networking_response = None
-    topology_links = slice_obj.topology or []
-
-    if topology_links:
-        # Convertir links de {vm_a: "VM1", ...} a {vm_a_id: 1, ...}
-        vm_name_to_id = {vm.name: vm.id for vm in vms_updated}
-        networking_links = []
-        for i, link in enumerate(topology_links):
-            vm_a_name = str(link.get("vm_a", "")).upper()
-            vm_b_name = str(link.get("vm_b", "")).upper()
-            vm_a_id = 0 if vm_a_name in ("INTERNET", "INET", "WAN", "EXTERNAL") else vm_name_to_id.get(link.get("vm_a"))
-            vm_b_id = 0 if vm_b_name in ("INTERNET", "INET", "WAN", "EXTERNAL") else vm_name_to_id.get(link.get("vm_b"))
-            if vm_a_id is not None and vm_b_id is not None:
-                networking_links.append({
-                    "link_name": f"link_{i}",
-                    "vm_a_id": vm_a_id,
-                    "iface_a": link.get("iface_a", "eth0"),
-                    "vm_b_id": vm_b_id,
-                    "iface_b": link.get("iface_b", "eth0")
-                })
-
-        networking_payload = {
-            "slice_id": slice_obj.id,
-            "placement_map": placement_map,
-            "links": networking_links
-        }
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                res = await client.post(f"{NETWORKING_URL}/networking/allocate", json=networking_payload)
-                if res.status_code == 200:
-                    networking_response = res.json()
-            except httpx.RequestError:
-                pass  # Networking se puede invocar después vía Dispatcher
-
-    # --- Paso 5: Enriquecer payloads de las tareas con datos completos ---
-    vlan_slice = None
-    bridge_name = None
-    if networking_response:
-        vlan_slice = networking_response.get("vlan_slice")
-        bridge_name = networking_response.get("bridge_name")
-        slice_obj.vlan_slice = vlan_slice
-
-    # Re-leer tareas + interfaces de cada VM para enriquecer
-    tasks_res = await db.execute(
-        select(models.Task).where(
-            models.Task.slice_id == slice_obj.id,
-            models.Task.task_type == "CREATE_VM"
-        )
-    )
-    tasks = tasks_res.scalars().all()
-
-    for task in tasks:
-        vm = next((v for v in vms_updated if v.id == task.vm_id), None)
-        if not vm:
-            continue
-
-        # Obtener interfaces de la VM desde la BD (insertadas por Networking)
-        ifaces_res = await db.execute(
-            select(models.VmInterface).where(models.VmInterface.vm_id == vm.id)
-        )
-        ifaces = ifaces_res.scalars().all()
-
-        interfaces_payload = []
-        for iface in ifaces:
-            # Obtener datos de la red asociada
-            net_res = await db.execute(
-                select(models.Network).where(models.Network.id == iface.network_id)
-            )
-            net = net_res.scalar_one_or_none()
-            interfaces_payload.append({
-                "interface_name": iface.interface_name,
-                "tap_name": iface.tap_name,
-                "vlan_inner": net.vlan_inner if net else 0,
-                "mac_address": iface.mac_address,
-                "bridge_name": iface.bridge_name or (f"br-sl-{slice_obj.id}" if net else "br-inet"),
-                "network_id": iface.network_id,
-                "is_remote": net.is_remote if net else False
-            })
-
-        instance_path = f"/mnt/storage/instances/{vm.id}.qcow2"
-        vm.instance_path = instance_path
-
-        # Payload completo según payload_schema.md
-        task.payload = {
-            "vm_name": vm.name,
-            "base_image": vm.base_image,
-            "base_path": f"/mnt/storage/base/{vm.base_image}",
-            "instance_path": instance_path,
-            "ram": vm.ram,
-            "vcpu": vm.vcpu,
-            "disk": vm.disk,
-            "slice_id": slice_obj.id,
-            "vlan_slice": vlan_slice,
-            "bridge_name": bridge_name or f"br-sl-{slice_obj.id}",
-            "interfaces": interfaces_payload
-        }
-
-    slice_obj.status = "ACTIVE"
-    await db.commit()
-    
-    status_detail = "ACTIVE"
-    msg_parts = [f"Slice aprobado. {tasks_created} tareas de tipo CREATE_VM generadas."]
-    if placement_success and all_placed:
-        msg_parts.append("Placement completado.")
-    elif not placement_success:
-        msg_parts.append("Placement pendiente (servicio no disponible, las tareas serán procesadas por el loop).")
-    if networking_response:
-        msg_parts.append(f"Networking asignado (Vlan-Slice: {vlan_slice}).")
-    else:
-        msg_parts.append("Networking pendiente (será asignado por el Dispatcher).")
+    tasks_created, activation_message = await _activate_linux_slice(slice_obj, db)
 
     return schemas.MessageResponse(
         slice_id=slice_obj.id,
-        status=status_detail,
-        message=" ".join(msg_parts),
+        status="ACTIVE",
+        message=f"Slice aprobado. {activation_message}",
         tasks_created=tasks_created
     )
 

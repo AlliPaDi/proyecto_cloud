@@ -20,6 +20,12 @@ function tdIsAdmin() {
   return ['SLICE_ADMIN', 'SYSTEM_ADMIN'].includes(state.user.role);
 }
 
+// SLICE_ADMIN/SYSTEM_ADMIN crean el slice directo (sin aprobación); STUDENT envía solicitud.
+function tdSubmitLabel(target) {
+  if (target === 'openstack') return 'Crear en OpenStack';
+  return tdIsAdmin() ? 'Crear' : 'Enviar solicitud';
+}
+
 function renderNewSlice() {
   beginRender(); // invalida fetches pendientes de la vista anterior
   if (TD?.animFrame) cancelAnimationFrame(TD.animFrame);
@@ -71,7 +77,7 @@ function renderNewSlice() {
               <button class="btn btn-ghost btn-sm" onclick="tdOpenTopoModal()">Plantilla</button>
               <button class="btn btn-danger btn-sm" onclick="tdDeleteSelected()">Eliminar</button>
             </div>
-            <button class="btn btn-primary" onclick="tdSubmit()" id="btn-td-submit">Enviar solicitud</button>
+            <button class="btn btn-primary" onclick="tdSubmit()" id="btn-td-submit">${tdSubmitLabel(TD.target)}</button>
           </div>
         </div>
 
@@ -175,11 +181,11 @@ async function tdLoadCatalogs() {
 function tdSetTarget(target) {
   TD.target = target;
   const btn = document.getElementById('btn-td-submit');
-  if (btn) btn.textContent = target === 'openstack' ? 'Crear en OpenStack' : 'Enviar solicitud';
+  if (btn) btn.textContent = tdSubmitLabel(target);
   tdRenderProps();
   tdSetHint(target === 'openstack'
     ? 'Destino OpenStack: se crea directo, sin aprobación'
-    : '');
+    : (tdIsAdmin() ? 'Destino Linux: se crea directo, sin aprobación' : ''));
 }
 
 // ── Canvas init + interacción ─────────────────────────────────
@@ -722,11 +728,13 @@ async function tdSend(payload, isOS) {
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
   try {
     await api('POST', '/slices/', payload);
-    toast(isOS ? 'Slice creado en OpenStack' : 'Slice enviado para aprobación', 'success');
+    const successMsg = isOS ? 'Slice creado en OpenStack'
+      : tdIsAdmin() ? 'Slice creado' : 'Slice enviado para aprobación';
+    toast(successMsg, 'success');
     if (TD.animFrame) cancelAnimationFrame(TD.animFrame);
     navigate(state.user.role === 'STUDENT' ? 'my-slices' : 'all-slices');
   } catch (e) {
     toast(e.message, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = isOS ? 'Crear en OpenStack' : 'Enviar solicitud'; }
+    if (btn) { btn.disabled = false; btn.textContent = tdSubmitLabel(TD.target); }
   }
 }
