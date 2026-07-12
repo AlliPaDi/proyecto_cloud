@@ -1,7 +1,9 @@
 // ── Vistas de Slices: listar, detalle, aprobar/rechazar, eliminar ──
 // Endpoints reales del Slice Manager:
-//   GET  /slices/            → {slices:[{id,name,status,vms_count,created_at}]}
+//   GET  /slices/            → {slices:[{id,name,status,iaas_target,vms_count,created_at}]}
 //   GET  /slices/{id}        → {id,name,status,vlan_slice,vms:[{...,vnc_url,interfaces}]}
+//   GET  /slices/{id}/export → SliceCreate (name,iaas_target,vms,links,networks) — SLICE_ADMIN/SYSTEM_ADMIN
+//   POST /slices/{id}/deploy   (SLICE_ADMIN/SYSTEM_ADMIN) — DRAFT -> ACTIVE
 //   POST /slices/{id}/approve  (SLICE_ADMIN)
 //   POST /slices/{id}/reject   (SLICE_ADMIN)
 //   DELETE /slices/{id}
@@ -91,23 +93,38 @@ async function renderAllSlices() {
     const { slices } = await api('GET', '/slices/');
     if (isStale(seq)) return;
 
+    const draftActions = s => s.status === 'DRAFT'
+      ? `<button class="btn btn-ghost btn-sm" onclick="exportSlice(${s.id})">Exportar</button>
+         <button class="btn btn-success btn-sm" onclick="deploySlice(${s.id})">Desplegar</button>`
+      : `<button class="btn btn-ghost btn-sm" onclick="exportSlice(${s.id})">Exportar</button>`;
+
     const actions = state.user.role === 'SLICE_ADMIN'
       ? s => `
           <button class="btn btn-ghost btn-sm" onclick="viewSliceDetail(${s.id})">Ver</button>
           ${s.status === 'PENDING_APPROVAL'
             ? `<button class="btn btn-success btn-sm" onclick="approveSlice(${s.id})">Aprobar</button>
                <button class="btn btn-danger  btn-sm" onclick="rejectSlice(${s.id})">Rechazar</button>`
-            : ''}
+            : draftActions(s)}
           <button class="btn btn-danger btn-sm" onclick="deleteSlice(${s.id})">Eliminar</button>`
       : s => `
           <button class="btn btn-ghost btn-sm" onclick="viewSliceDetail(${s.id})">Ver</button>
           <button class="btn btn-ghost  btn-sm" onclick="viewNetDetail(${s.id})">Red</button>
+          ${draftActions(s)}
           <button class="btn btn-danger btn-sm" onclick="deleteSlice(${s.id})">Eliminar</button>`;
 
+    const importBar = `
+      <input type="file" id="import-file-input" accept=".json,application/json" style="display:none" onchange="handleImportFile(this)" />
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('import-file-input').click()">Importar Topología</button>`;
+
     content.innerHTML = slices.length === 0
-      ? `<div class="card"><div class="empty-state"><div class="empty-icon">📭</div><p>No hay slices en el sistema.</p></div></div>`
+      ? `<div class="card">
+          <div class="card-title">Todos los Slices ${importBar}</div>
+          <div class="empty-state"><div class="empty-icon">📭</div><p>No hay slices en el sistema.</p></div>
+        </div>`
       : `<div class="card">
-          <div class="card-title">Todos los Slices</div>
+          <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+            <span>Todos los Slices</span>${importBar}
+          </div>
           <div class="table-wrap"><table>
             <thead><tr><th>ID</th><th>Nombre</th><th>Estado</th><th>VMs</th><th>Creado</th><th>Acciones</th></tr></thead>
             <tbody>${slices.map(s => `
@@ -197,6 +214,79 @@ async function deleteSlice(id) {
   try {
     await api('DELETE', `/slices/${id}`);
     toast('Slice eliminado', 'success');
+    navigate(state.view);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function deploySlice(id) {
+  if (!confirm(`¿Desplegar slice #${id}? Se creará la infraestructura real (VMs + red).`)) return;
+  try {
+    const res = await api('POST', `/slices/${id}/deploy`);
+    toast(res.message || `Slice #${id} desplegado`, 'success');
+    navigate(state.view);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Exportar / Importar topología (Borradores) ─────────────────
+async function exportSlice(id) {
+  try {
+    const data = await api('GET', `/slices/${id}/export`);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${data.name || 'slice'}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+let _importedTopology = null;
+
+async function handleImportFile(input) {
+  const file = input.files[0];
+  input.value = '';
+  if (!file) return;
+  try {
+    const parsed = JSON.parse(await file.text());
+    if (!Array.isArray(parsed.vms) || !parsed.vms.length) throw new Error('El archivo no contiene VMs (vms[])');
+    if (!Array.isArray(parsed.links)) throw new Error('El archivo no contiene enlaces (links[])');
+    _importedTopology = parsed;
+
+    openModal('Importar Topología', `
+      <p class="text-muted text-sm" style="margin-bottom:12px">
+        ${parsed.vms.length} VM(s), ${parsed.links.length} enlace(s) — destino: ${esc(parsed.iaas_target || 'linux')}
+      </p>
+      <div class="field">
+        <label>Nombre del nuevo Slice</label>
+        <input type="text" id="import-new-name" value="${esc((parsed.name || 'topologia') + '_import')}" />
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="confirmImport()">Importar como Borrador</button>
+      </div>
+    `);
+  } catch (e) {
+    toast(`Archivo inválido: ${e.message}`, 'error');
+  }
+}
+
+async function confirmImport() {
+  const name = document.getElementById('import-new-name')?.value?.trim();
+  if (!name) { toast('Ingresa un nombre', 'error'); return; }
+  if (!_importedTopology) return;
+  try {
+    const payload = { ..._importedTopology, name };
+    await api('POST', '/slices/', payload);
+    closeModal();
+    _importedTopology = null;
+    toast('Topología importada como nuevo Borrador', 'success');
     navigate(state.view);
   } catch (e) {
     toast(e.message, 'error');

@@ -25,6 +25,7 @@ function badge(status) {
     ACTIVE:           'badge-active',
     READY:            'badge-active',
     ALIVE:            'badge-active',
+    DRAFT:            'badge-info',
     PENDING_APPROVAL: 'badge-pending',
     PENDING:          'badge-pending',
     PLACEMENT_READY:  'badge-pending',

@@ -20,10 +20,9 @@ function tdIsAdmin() {
   return ['SLICE_ADMIN', 'SYSTEM_ADMIN'].includes(state.user.role);
 }
 
-// SLICE_ADMIN/SYSTEM_ADMIN crean el slice directo (sin aprobación); STUDENT envía solicitud.
-function tdSubmitLabel(target) {
-  if (target === 'openstack') return 'Crear en OpenStack';
-  return tdIsAdmin() ? 'Crear' : 'Enviar solicitud';
+// SLICE_ADMIN/SYSTEM_ADMIN guardan el slice como Borrador (sin desplegar); STUDENT envía solicitud.
+function tdSubmitLabel() {
+  return tdIsAdmin() ? 'Guardar Borrador' : 'Enviar solicitud';
 }
 
 function renderNewSlice() {
@@ -80,7 +79,7 @@ function renderNewSlice() {
               <button class="btn btn-ghost btn-sm" onclick="tdOpenTopoModal()">Plantilla</button>
               <button class="btn btn-danger btn-sm" onclick="tdDeleteSelected()">Eliminar</button>
             </div>
-            <button class="btn btn-primary" onclick="tdSubmit()" id="btn-td-submit">${tdSubmitLabel(TD.target)}</button>
+            <button class="btn btn-primary" onclick="tdSubmit()" id="btn-td-submit">${tdSubmitLabel()}</button>
           </div>
         </div>
 
@@ -188,12 +187,10 @@ async function tdLoadCatalogs() {
 function tdSetTarget(target) {
   TD.target = target;
   const btn = document.getElementById('btn-td-submit');
-  if (btn) btn.textContent = tdSubmitLabel(target);
+  if (btn) btn.textContent = tdSubmitLabel();
   if (target === 'openstack' && !TD.osCatalogsLoaded) tdLoadOSCatalogs();
   tdRenderProps();
-  tdSetHint(target === 'openstack'
-    ? 'Destino OpenStack: se crea directo, sin aprobación'
-    : (tdIsAdmin() ? 'Destino Linux: se crea directo, sin aprobación' : ''));
+  tdSetHint(tdIsAdmin() ? 'Se guardará como Borrador (sin desplegar aún)' : '');
 }
 
 // Carga catálogos de OpenStack (Nova/Glance) una sola vez, bajo demanda
@@ -769,21 +766,20 @@ function tdSubmit() {
     }));
   }
 
-  tdSend(payload, isOS);
+  tdSend(payload);
 }
 
-async function tdSend(payload, isOS) {
+async function tdSend(payload) {
   const btn = document.getElementById('btn-td-submit');
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
   try {
     await api('POST', '/slices/', payload);
-    const successMsg = isOS ? 'Slice creado en OpenStack'
-      : tdIsAdmin() ? 'Slice creado' : 'Slice enviado para aprobación';
+    const successMsg = tdIsAdmin() ? 'Slice guardado como Borrador' : 'Slice enviado para aprobación';
     toast(successMsg, 'success');
     if (TD.animFrame) cancelAnimationFrame(TD.animFrame);
     navigate(state.user.role === 'STUDENT' ? 'my-slices' : 'all-slices');
   } catch (e) {
     toast(e.message, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = tdSubmitLabel(TD.target); }
+    if (btn) { btn.disabled = false; btn.textContent = tdSubmitLabel(); }
   }
 }
