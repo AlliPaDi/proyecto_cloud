@@ -14,6 +14,7 @@ class Worker(Base):
     current_cpu_load = Column(DECIMAL(5, 2), default=0.0)
     current_ram_available = Column(Integer, default=0)
     status = Column(String(20), default="ALIVE")
+    cluster_type = Column(String(20), default="linux")
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -25,6 +26,7 @@ class Slice(Base):
     vlan_slice = Column(Integer)
     topology = Column(JSON)
     status = Column(String(20), default="PENDING_APPROVAL")
+    iaas_target = Column(String(20), default="linux")
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -36,11 +38,14 @@ class VirtualMachine(Base):
     base_image = Column(String(100), nullable=False)
     ram = Column(Integer, nullable=False)
     vcpu = Column(Integer, nullable=False)
+    disk = Column(Integer, nullable=True)
+    flavor = Column(String(100), nullable=True)
     worker_id = Column(Integer, ForeignKey("workers.id"))
     process_id = Column(Integer)
     vnc_port = Column(Integer)
     instance_path = Column(String(255))
     status = Column(String(20), default="PENDING_APPROVAL")
+    vnc_url = Column(String(500), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

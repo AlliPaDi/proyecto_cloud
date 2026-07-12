@@ -10,6 +10,7 @@ class VmPayload(BaseModel):
     base_image: str
     ram: int
     vcpu: int
+    disk: int
     instance_path: str
 
 class SlicePayload(BaseModel):

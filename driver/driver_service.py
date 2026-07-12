@@ -55,6 +55,8 @@ class DriverService:
         # --- 1. Thin Provisioning ---
         base_path = f"/mnt/storage/base/{req.vm.base_image}"
         commands.append(f"sudo qemu-img create -f qcow2 -b {base_path} -F qcow2 {req.vm.instance_path}")
+        if req.vm.disk > 0:
+            commands.append(f"sudo qemu-img resize {req.vm.instance_path} {req.vm.disk}G")
         rollback_actions.append(f"sudo rm -f {req.vm.instance_path}")
 
         # --- 1.5. Cloud-Init Ligero (Credenciales y Hostname sin red) ---
