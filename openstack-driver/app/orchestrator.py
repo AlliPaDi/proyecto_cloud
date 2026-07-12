@@ -285,7 +285,9 @@ class OpenStackOrchestrator:
                 vm_detail.status = status
                 
                 if status == "ERROR":
-                    raise Exception(f"La máquina virtual {vm_detail.name} falló al iniciar en OpenStack (estado: ERROR).")
+                    fault = server_info.get("fault", {})
+                    fault_msg = fault.get("message", "sin detalle de Nova")
+                    raise Exception(f"La máquina virtual {vm_detail.name} falló al iniciar en OpenStack (estado: ERROR). Motivo de Nova: {fault_msg}")
                 if status != "ACTIVE":
                     all_active = False
             
