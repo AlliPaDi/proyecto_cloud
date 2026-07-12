@@ -304,6 +304,68 @@ async def _activate_openstack_slice(slice_obj: models.Slice, db: AsyncSession):
     return tasks_created, f"{tasks_created} tareas de tipo CREATE_VM generadas. {placement_message}"
 
 # ---------------------------------------------------------------------------
+# Valida flavor/imagen y crea las filas VirtualMachine de un slice (linux u
+# openstack). Reutilizado por create_slice y por update_slice (edición de
+# un Borrador, donde primero se borran las VMs previas y se reconstruyen).
+# ---------------------------------------------------------------------------
+async def _build_vms(slice_in: schemas.SliceCreate, user: models.User, slice_id: int, vm_status: str, db: AsyncSession):
+    vm_records = {}
+    async with httpx.AsyncClient() as client:
+        for vm in slice_in.vms:
+            ram = 0
+            vcpu = 0
+            disk = 0
+            flavor_str = vm.flavor
+
+            if slice_in.iaas_target == "linux":
+                if not vm.flavor_id:
+                    raise HTTPException(status_code=400, detail=f"flavor_id is required for linux VM {vm.name}")
+                flavor_res = await db.execute(select(models.Flavor).where(models.Flavor.id == vm.flavor_id))
+                flavor_obj = flavor_res.scalar_one_or_none()
+                if not flavor_obj:
+                    raise HTTPException(status_code=400, detail=f"Flavor ID {vm.flavor_id} not found")
+                if user.role == "STUDENT" and flavor_obj.allowed_role != "STUDENT":
+                    raise HTTPException(status_code=403, detail=f"Student cannot use flavor {flavor_obj.name}")
+
+                ram = flavor_obj.ram
+                vcpu = flavor_obj.vcpu
+                disk = flavor_obj.disk
+
+            elif slice_in.iaas_target == "openstack":
+                if not vm.flavor:
+                    raise HTTPException(status_code=400, detail=f"flavor (string) is required for openstack VM {vm.name}")
+
+                # Dynamic fetch from Nova API
+                OPENSTACK_DRIVER_URL = os.getenv("OPENSTACK_DRIVER_URL", "http://openstack-driver:8089")
+                try:
+                    os_res = await client.get(f"{OPENSTACK_DRIVER_URL}/v1/flavors/{vm.flavor}")
+                    if os_res.status_code == 200:
+                        os_flavor = os_res.json()
+                        ram = os_flavor.get("ram", 0)
+                        vcpu = os_flavor.get("vcpus", 0)
+                        disk = os_flavor.get("disk", 0)
+                    else:
+                        raise HTTPException(status_code=400, detail=f"OpenStack flavor {vm.flavor} not found or error")
+                except httpx.RequestError:
+                    raise HTTPException(status_code=503, detail="OpenStack Driver unavailable")
+
+            new_vm = models.VirtualMachine(
+                slice_id=slice_id,
+                name=vm.name,
+                base_image=vm.base_image,
+                ram=ram,
+                vcpu=vcpu,
+                disk=disk,
+                flavor=flavor_str,
+                flavor_id=vm.flavor_id,
+                status=vm_status
+            )
+            db.add(new_vm)
+            await db.flush()
+            vm_records[vm.name] = new_vm
+    return vm_records
+
+# ---------------------------------------------------------------------------
 # POST /slices/ — Crear slice (STUDENT: solicitud; SLICE_ADMIN/SYSTEM_ADMIN: borrador)
 # ---------------------------------------------------------------------------
 # Flujo: Validar imágenes → Insertar slice + VMs.
@@ -359,62 +421,8 @@ async def create_slice(
     db.add(new_slice)
     await db.flush()
 
-    vm_records = {}
-    async with httpx.AsyncClient() as client:
-        for vm in slice_in.vms:
-            vm_status = "DRAFT" if is_admin else "PENDING_APPROVAL"
-
-            ram = 0
-            vcpu = 0
-            disk = 0
-            flavor_str = vm.flavor
-            
-            if slice_in.iaas_target == "linux":
-                if not vm.flavor_id:
-                    raise HTTPException(status_code=400, detail=f"flavor_id is required for linux VM {vm.name}")
-                flavor_res = await db.execute(select(models.Flavor).where(models.Flavor.id == vm.flavor_id))
-                flavor_obj = flavor_res.scalar_one_or_none()
-                if not flavor_obj:
-                    raise HTTPException(status_code=400, detail=f"Flavor ID {vm.flavor_id} not found")
-                if user.role == "STUDENT" and flavor_obj.allowed_role != "STUDENT":
-                    raise HTTPException(status_code=403, detail=f"Student cannot use flavor {flavor_obj.name}")
-                
-                ram = flavor_obj.ram
-                vcpu = flavor_obj.vcpu
-                disk = flavor_obj.disk
-                
-            elif slice_in.iaas_target == "openstack":
-                if not vm.flavor:
-                    raise HTTPException(status_code=400, detail=f"flavor (string) is required for openstack VM {vm.name}")
-                
-                # Dynamic fetch from Nova API
-                OPENSTACK_DRIVER_URL = os.getenv("OPENSTACK_DRIVER_URL", "http://openstack-driver:8089")
-                try:
-                    os_res = await client.get(f"{OPENSTACK_DRIVER_URL}/v1/flavors/{vm.flavor}")
-                    if os_res.status_code == 200:
-                        os_flavor = os_res.json()
-                        ram = os_flavor.get("ram", 0)
-                        vcpu = os_flavor.get("vcpus", 0)
-                        disk = os_flavor.get("disk", 0)
-                    else:
-                        raise HTTPException(status_code=400, detail=f"OpenStack flavor {vm.flavor} not found or error")
-                except httpx.RequestError:
-                    raise HTTPException(status_code=503, detail="OpenStack Driver unavailable")
-            
-            new_vm = models.VirtualMachine(
-                slice_id=new_slice.id,
-                name=vm.name,
-                base_image=vm.base_image,
-                ram=ram,
-                vcpu=vcpu,
-                disk=disk,
-                flavor=flavor_str,
-                flavor_id=vm.flavor_id,
-                status=vm_status
-            )
-            db.add(new_vm)
-            await db.flush()
-            vm_records[vm.name] = new_vm
+    vm_status = "DRAFT" if is_admin else "PENDING_APPROVAL"
+    vm_records = await _build_vms(slice_in, user, new_slice.id, vm_status, db)
 
     # Nota: la creación de tareas CREATE_VM y el trigger de Placement ya no
     # ocurren aquí. Para SLICE_ADMIN/SYSTEM_ADMIN el slice queda en DRAFT y
@@ -431,6 +439,87 @@ async def create_slice(
         slice_id=new_slice.id,
         name=new_slice.name,
         status=new_slice.status,
+        vms=vms_response,
+        links_count=len(slice_in.links)
+    )
+
+# ---------------------------------------------------------------------------
+# PUT /slices/{id} — Editar la topología de un Borrador (SLICE_ADMIN/SYSTEM_ADMIN)
+# ---------------------------------------------------------------------------
+# Solo permitido mientras el slice está en DRAFT. Reemplaza nombre, destino,
+# topología (links/networks) y VMs por completo: borra las VMs actuales
+# (en DRAFT no tienen interfaces/tareas reales aún) y las reconstruye con
+# _build_vms, igual que en la creación.
+# ---------------------------------------------------------------------------
+@router.put("/{id}", response_model=schemas.SliceCreateResponse)
+async def update_slice(
+    id: int,
+    slice_in: schemas.SliceCreate,
+    x_user_role: str = Header(...),
+    x_user_id: int = Header(...),
+    db: AsyncSession = Depends(get_db)
+):
+    user = await get_current_user(x_user_role, x_user_id, db)
+    if user.role not in ["SLICE_ADMIN", "SYSTEM_ADMIN"]:
+        raise HTTPException(status_code=403, detail="Only SLICE_ADMIN/SYSTEM_ADMIN can edit slices")
+
+    result = await db.execute(
+        select(models.Slice).options(selectinload(models.Slice.vms)).where(models.Slice.id == id)
+    )
+    slice_obj = result.scalar_one_or_none()
+    if not slice_obj:
+        raise HTTPException(status_code=404, detail="Slice not found")
+
+    if user.role == "SLICE_ADMIN" and slice_obj.user_id != user.id:
+        student_res = await db.execute(select(models.User).where(models.User.id == slice_obj.user_id))
+        student = student_res.scalar_one_or_none()
+        if not student or student.admin_id != user.id:
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+    if slice_obj.status != "DRAFT":
+        raise HTTPException(status_code=409, detail="Only slices in DRAFT state can be edited")
+
+    if slice_in.iaas_target == "linux":
+        async with httpx.AsyncClient() as client:
+            for vm in slice_in.vms:
+                try:
+                    res = await client.get(f"{IMAGE_MANAGER_URL}/images/{vm.base_image}/validate")
+                    if res.status_code != 200:
+                        raise HTTPException(status_code=400, detail=f"Image {vm.base_image} invalid or not found")
+                except httpx.RequestError:
+                    raise HTTPException(status_code=503, detail="Image Manager service unavailable")
+
+    if slice_in.iaas_target == "openstack":
+        topology_data = {
+            "links": [link.model_dump() for link in slice_in.links],
+            "networks": [net.model_dump() for net in slice_in.networks]
+        }
+    else:
+        topology_data = [link.model_dump() for link in slice_in.links]
+
+    # Reemplazo completo de VMs: en DRAFT no existen interfaces/tareas reales aún.
+    for vm in list(slice_obj.vms):
+        await db.delete(vm)
+    await db.flush()
+
+    slice_obj.name = slice_in.name
+    slice_obj.iaas_target = slice_in.iaas_target
+    slice_obj.topology = topology_data
+    await db.flush()
+
+    vm_records = await _build_vms(slice_in, user, slice_obj.id, "DRAFT", db)
+
+    await db.commit()
+    await db.refresh(slice_obj)
+
+    vms_response = [
+        schemas.SliceResponseVM(id=vm_records[v].id, name=vm_records[v].name, status=vm_records[v].status)
+        for v in vm_records
+    ]
+    return schemas.SliceCreateResponse(
+        slice_id=slice_obj.id,
+        name=slice_obj.name,
+        status=slice_obj.status,
         vms=vms_response,
         links_count=len(slice_in.links)
     )

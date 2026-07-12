@@ -3,6 +3,7 @@
 //   GET  /slices/            → {slices:[{id,name,status,iaas_target,vms_count,created_at}]}
 //   GET  /slices/{id}        → {id,name,status,vlan_slice,vms:[{...,vnc_url,interfaces}]}
 //   GET  /slices/{id}/export → SliceCreate (name,iaas_target,vms,links,networks) — SLICE_ADMIN/SYSTEM_ADMIN
+//   PUT  /slices/{id}          (SLICE_ADMIN/SYSTEM_ADMIN) — edita un Borrador (solo DRAFT)
 //   POST /slices/{id}/deploy   (SLICE_ADMIN/SYSTEM_ADMIN) — DRAFT -> ACTIVE
 //   POST /slices/{id}/approve  (SLICE_ADMIN)
 //   POST /slices/{id}/reject   (SLICE_ADMIN)
@@ -94,7 +95,8 @@ async function renderAllSlices() {
     if (isStale(seq)) return;
 
     const draftActions = s => s.status === 'DRAFT'
-      ? `<button class="btn btn-ghost btn-sm" onclick="exportSlice(${s.id})">Exportar</button>
+      ? `<button class="btn btn-ghost btn-sm" onclick="editSlice(${s.id})">Editar</button>
+         <button class="btn btn-ghost btn-sm" onclick="exportSlice(${s.id})">Exportar</button>
          <button class="btn btn-success btn-sm" onclick="deploySlice(${s.id})">Desplegar</button>`
       : `<button class="btn btn-ghost btn-sm" onclick="exportSlice(${s.id})">Exportar</button>`;
 
@@ -218,6 +220,20 @@ async function deleteSlice(id) {
   } catch (e) {
     toast(e.message, 'error');
   }
+}
+
+// Abre el diseñador de topologías (designer.js) precargado con un Borrador
+// existente, para editarlo antes de desplegarlo.
+async function editSlice(id) {
+  try {
+    const data = await api('GET', `/slices/${id}/export`);
+    state.view = 'new-slice';
+    document.querySelectorAll('.nav-item').forEach(el => {
+      el.classList.toggle('active', el.dataset.view === 'new-slice');
+    });
+    document.getElementById('topbar-title').textContent = 'Editar Slice';
+    renderNewSlice(id, data);
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 async function deploySlice(id) {

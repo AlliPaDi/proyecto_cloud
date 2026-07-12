@@ -25,7 +25,19 @@ function tdSubmitLabel() {
   return tdIsAdmin() ? 'Guardar Borrador' : 'Enviar solicitud';
 }
 
-function renderNewSlice() {
+// Botón(es) de envío: normal al crear; "Guardar cambios" + "Guardar como nueva…" al editar un Borrador.
+function tdSubmitButtonsHTML() {
+  if (TD.editingSliceId) {
+    return `
+      <button class="btn btn-ghost" onclick="tdSubmit('new')" id="btn-td-submit-new">Guardar como nueva…</button>
+      <button class="btn btn-primary" onclick="tdSubmit('update')" id="btn-td-submit">Guardar cambios</button>`;
+  }
+  return `<button class="btn btn-primary" onclick="tdSubmit()" id="btn-td-submit">${tdSubmitLabel()}</button>`;
+}
+
+// editId/editData: al editar un Borrador existente (viene de editSlice() en slices.js,
+// que ya trae editData desde GET /slices/{id}/export con la forma de SliceCreate).
+function renderNewSlice(editId, editData) {
   beginRender(); // invalida fetches pendientes de la vista anterior
   if (TD?.animFrame) cancelAnimationFrame(TD.animFrame);
 
@@ -38,19 +50,20 @@ function renderNewSlice() {
     drag: null,
     mouseX: 0, mouseY: 0,
     animFrame: null,
-    target: 'linux',        // 'linux' | 'openstack'
+    target: editData?.iaas_target || 'linux',   // 'linux' | 'openstack'
     flavors: [],            // catálogo /flavors/ (linux)
     images: [],             // catálogo /images/ (linux)
     osFlavors: [],          // catálogo /openstack/flavors (Nova)
     osImages: [],           // catálogo /openstack/images (Glance)
     osCatalogsLoaded: false,
+    editingSliceId: editId || null,
   };
 
   const targetSelector = tdIsAdmin() ? `
     <div class="field" style="margin:0">
       <select id="td-target" onchange="tdSetTarget(this.value)" title="Plataforma destino">
-        <option value="linux">Cluster Linux</option>
-        <option value="openstack">OpenStack</option>
+        <option value="linux" ${TD.target === 'linux' ? 'selected' : ''}>Cluster Linux</option>
+        <option value="openstack" ${TD.target === 'openstack' ? 'selected' : ''}>OpenStack</option>
       </select>
     </div>` : '';
 
@@ -63,7 +76,7 @@ function renderNewSlice() {
         <div class="card" style="padding:10px 14px;margin:0;flex-shrink:0">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div class="field" style="margin:0;flex:1;min-width:160px">
-              <input type="text" id="td-name" placeholder="Nombre del Slice" style="font-weight:600" />
+              <input type="text" id="td-name" placeholder="Nombre del Slice" style="font-weight:600" value="${esc(editData?.name || '')}" />
             </div>
             ${targetSelector}
             <div style="display:flex;gap:6px;align-items:center">
@@ -79,7 +92,7 @@ function renderNewSlice() {
               <button class="btn btn-ghost btn-sm" onclick="tdOpenTopoModal()">Plantilla</button>
               <button class="btn btn-danger btn-sm" onclick="tdDeleteSelected()">Eliminar</button>
             </div>
-            <button class="btn btn-primary" onclick="tdSubmit()" id="btn-td-submit">${tdSubmitLabel()}</button>
+            ${tdSubmitButtonsHTML()}
           </div>
         </div>
 
@@ -169,7 +182,8 @@ function renderNewSlice() {
     </div>`;
 
   tdLoadCatalogs();
-  setTimeout(tdInitCanvas, 20);
+  if (TD.target === 'openstack') tdLoadOSCatalogs();
+  setTimeout(() => tdInitCanvas(editData), 20);
 }
 
 // Carga catálogos de imágenes y flavors una sola vez por sesión de diseño
@@ -187,10 +201,10 @@ async function tdLoadCatalogs() {
 function tdSetTarget(target) {
   TD.target = target;
   const btn = document.getElementById('btn-td-submit');
-  if (btn) btn.textContent = tdSubmitLabel();
+  if (btn) btn.textContent = tdPrimaryButtonLabel();
   if (target === 'openstack' && !TD.osCatalogsLoaded) tdLoadOSCatalogs();
   tdRenderProps();
-  tdSetHint(tdIsAdmin() ? 'Se guardará como Borrador (sin desplegar aún)' : '');
+  tdSetHint(TD.editingSliceId ? 'Editando Borrador existente' : (tdIsAdmin() ? 'Se guardará como Borrador (sin desplegar aún)' : ''));
 }
 
 // Carga catálogos de OpenStack (Nova/Glance) una sola vez, bajo demanda
@@ -210,7 +224,7 @@ async function tdLoadOSCatalogs() {
 }
 
 // ── Canvas init + interacción ─────────────────────────────────
-function tdInitCanvas() {
+function tdInitCanvas(editData) {
   const canvas = document.getElementById('td-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -221,6 +235,8 @@ function tdInitCanvas() {
     canvas.height = r.height;
   }
   resize();
+
+  if (editData) tdLoadFromExport(editData, canvas.width, canvas.height);
 
   const ro = new ResizeObserver(resize);
   ro.observe(canvas.parentElement);
@@ -237,6 +253,51 @@ function tdInitCanvas() {
   loop();
 
   tdSetMode('select');
+  tdRenderProps();
+  tdUpdateSummary();
+}
+
+// ── Carga una topología existente (desde GET /slices/{id}/export) en el canvas ──
+const TD_INTERNET_ALIASES = ['internet', 'inet', 'wan', 'external', 'external-provider'];
+function tdIsInternetName(name) { return TD_INTERNET_ALIASES.includes(String(name || '').toLowerCase()); }
+
+function tdLoadFromExport(data, W, H) {
+  TD.vms = []; TD.links = [];
+  TD.nextVmId = 1; TD.nextLinkId = 1;
+
+  const nameToId = {};
+  const n = (data.vms || []).length;
+  const cx = W / 2, cy = H / 2, r = Math.min(W, H) * 0.34;
+
+  (data.vms || []).forEach((vm, i) => {
+    const id = TD.nextVmId++;
+    const angle = n > 1 ? (2 * Math.PI * i / n) - Math.PI / 2 : -Math.PI / 2;
+    TD.vms.push({
+      id, name: vm.name,
+      base_image: vm.base_image || '',
+      flavor_id: vm.flavor_id ?? null,
+      flavor: vm.flavor || '',
+      isInternet: false,
+      x: n > 1 ? cx + r * Math.cos(angle) : cx,
+      y: n > 1 ? cy + r * Math.sin(angle) : cy,
+    });
+    nameToId[vm.name] = id;
+  });
+
+  const links = data.links || [];
+  let internetId = null;
+  if (links.some(l => tdIsInternetName(l.vm_a) || tdIsInternetName(l.vm_b))) {
+    internetId = TD.nextVmId++;
+    TD.vms.push({ id: internetId, name: TD_INTERNET_NAME, isInternet: true, x: W - 110, y: 55 });
+  }
+
+  links.forEach(l => {
+    const aId = tdIsInternetName(l.vm_a) ? internetId : nameToId[l.vm_a];
+    const bId = tdIsInternetName(l.vm_b) ? internetId : nameToId[l.vm_b];
+    if (aId == null || bId == null) return;
+    const id = TD.nextLinkId++;
+    TD.links.push({ id, name: `link-${id}`, vmA: aId, vmB: bId });
+  });
 }
 
 function tdCanvasPos(e, canvas) {
@@ -703,7 +764,9 @@ function tdUpdateSummary() {
 }
 
 // ── Envío ─────────────────────────────────────────────────────
-function tdSubmit() {
+// mode: undefined (crear/enviar solicitud) | 'update' (guardar cambios en el mismo
+// Borrador editado) | 'new' (guardar la edición como una topología nueva, con nombre propio)
+function tdSubmit(mode) {
   const name = document.getElementById('td-name')?.value?.trim();
   const realVms = TD.vms.filter(v => !v.isInternet);
 
@@ -766,7 +829,13 @@ function tdSubmit() {
     }));
   }
 
+  if (mode === 'update')      { tdSendUpdate(payload); return; }
+  if (mode === 'new')         { tdPromptSaveAsNew(payload); return; }
   tdSend(payload);
+}
+
+function tdPrimaryButtonLabel() {
+  return TD.editingSliceId ? 'Guardar cambios' : tdSubmitLabel();
 }
 
 async function tdSend(payload) {
@@ -780,6 +849,45 @@ async function tdSend(payload) {
     navigate(state.user.role === 'STUDENT' ? 'my-slices' : 'all-slices');
   } catch (e) {
     toast(e.message, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = tdSubmitLabel(); }
+    if (btn) { btn.disabled = false; btn.textContent = tdPrimaryButtonLabel(); }
   }
+}
+
+// Guarda los cambios sobre el mismo Borrador que se está editando (PUT).
+async function tdSendUpdate(payload) {
+  const btn = document.getElementById('btn-td-submit');
+  if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
+  try {
+    await api('PUT', `/slices/${TD.editingSliceId}`, payload);
+    toast('Cambios guardados', 'success');
+    if (TD.animFrame) cancelAnimationFrame(TD.animFrame);
+    navigate('all-slices');
+  } catch (e) {
+    toast(e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Guardar cambios'; }
+  }
+}
+
+// Pide un nombre nuevo y crea un Borrador independiente con la topología editada,
+// sin tocar el Borrador original.
+function tdPromptSaveAsNew(payload) {
+  TD._pendingNewPayload = payload;
+  openModal('Guardar como nueva topología', `
+    <div class="field">
+      <label>Nombre de la nueva topología</label>
+      <input type="text" id="td-new-name" value="${esc(payload.name + '_copy')}" />
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary btn-sm" onclick="tdConfirmSaveAsNew()">Guardar</button>
+    </div>
+  `);
+}
+
+async function tdConfirmSaveAsNew() {
+  const name = document.getElementById('td-new-name')?.value?.trim();
+  if (!name) { toast('Ingresa un nombre', 'error'); return; }
+  const payload = { ...TD._pendingNewPayload, name };
+  closeModal();
+  await tdSend(payload);
 }
