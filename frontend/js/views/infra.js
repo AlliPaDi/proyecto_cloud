@@ -1,37 +1,18 @@
-// ── Infraestructura (SYSTEM_ADMIN): workers + placement ───────
+// ── Infraestructura (SYSTEM_ADMIN): workers ───────────────────
 // GET /infra/workers      → Monitoring: hostname, ip_management, total_ram,
 //                           total_cpu, current_cpu_load, current_ram_available,
 //                           status, updated_at
-// GET /placement/status   → algorithm, last_worker_id, tasks_pending,
-//                           tasks_placement_ready
 
 async function renderInfra() {
   const seq = beginRender();
   const content = document.getElementById('content');
   content.innerHTML = `<div class="text-muted">Cargando...</div>`;
   try {
-    const [data, placement] = await Promise.all([
-      api('GET', '/infra/workers'),
-      api('GET', '/placement/status').catch(() => null),
-    ]);
+    const data = await api('GET', '/infra/workers');
     if (isStale(seq)) return;
     const workers = data.workers || [];
     const alive = workers.filter(w => w.status === 'ALIVE').length;
     const down  = workers.filter(w => w.status === 'DOWN').length;
-
-    const placementHTML = placement ? `
-      <div class="card" style="margin-bottom:16px">
-        <div class="card-title">VM Placement</div>
-        <div class="grid-stats">
-          <div class="stat-card"><div class="stat-value" style="font-size:16px;color:var(--purple)">${esc(placement.algorithm)}</div><div class="stat-label">Algoritmo</div></div>
-          <div class="stat-card"><div class="stat-value">${placement.last_worker_id}</div><div class="stat-label">Último worker asignado</div></div>
-          <div class="stat-card"><div class="stat-value" style="color:${placement.tasks_pending > 0 ? 'var(--warning)' : 'var(--text)'}">${placement.tasks_pending ?? 0}</div><div class="stat-label">Tareas pendientes</div></div>
-          <div class="stat-card"><div class="stat-value" style="color:var(--success)">${placement.tasks_placement_ready ?? 0}</div><div class="stat-label">Con placement listo</div></div>
-        </div>
-        <div style="margin-top:10px">
-          <button class="btn btn-primary btn-sm" onclick="triggerPlacement()">Ejecutar placement ahora</button>
-        </div>
-      </div>` : '';
 
     content.innerHTML = `
       <div class="grid-stats" style="margin-bottom:20px">
@@ -39,7 +20,6 @@ async function renderInfra() {
         <div class="stat-card"><div class="stat-value" style="color:var(--success)">${alive}</div><div class="stat-label">ALIVE</div></div>
         <div class="stat-card"><div class="stat-value" style="color:var(--danger)">${down}</div><div class="stat-label">DOWN</div></div>
       </div>
-      ${placementHTML}
       <div class="card">
         <div class="card-title">Estado de Workers</div>
         ${workers.length === 0
@@ -65,12 +45,4 @@ async function renderInfra() {
     if (isStale(seq)) return;
     content.innerHTML = `<div class="card"><p class="error-msg">${esc(e.message)}</p></div>`;
   }
-}
-
-async function triggerPlacement() {
-  try {
-    const res = await api('POST', '/placement/trigger');
-    toast(`Placement ejecutado: ${res.tasks_processed} tareas procesadas, ${res.assignments.length} asignaciones`, 'success');
-    renderInfra();
-  } catch (e) { toast(e.message, 'error'); }
 }
