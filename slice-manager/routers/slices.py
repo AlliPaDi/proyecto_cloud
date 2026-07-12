@@ -440,6 +440,7 @@ async def list_slices(
     elif user.role == "SLICE_ADMIN":
         students_res = await db.execute(select(models.User.id).where(models.User.admin_id == user.id))
         student_ids = [row[0] for row in students_res.all()]
+        student_ids.append(user.id)
         result = await db.execute(select(models.Slice).options(selectinload(models.Slice.vms)).where(models.Slice.user_id.in_(student_ids)))
     else:
         result = await db.execute(select(models.Slice).options(selectinload(models.Slice.vms)))
