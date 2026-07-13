@@ -105,6 +105,7 @@ class SliceDetailResponse(BaseModel):
     status: str
     vlan_slice: Optional[int]
     vms: List[VMDetail]
+    links: List[LinkSchema] = Field(default_factory=list)
 
     class Config:
         from_attributes = True

@@ -175,9 +175,14 @@ async function viewSliceDetail(id) {
         <span class="text-muted text-sm">ID: ${s.id}</span>
         ${s.vlan_slice ? `<span class="text-muted text-sm">VLAN-Slice: ${s.vlan_slice}</span>` : ''}
       </div>
+      <div class="card-title" style="margin-bottom:8px">Topología</div>
+      <div style="position:relative;height:220px;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:16px">
+        <canvas id="slice-view-canvas" style="display:block;width:100%;height:100%"></canvas>
+      </div>
       <div class="card-title" style="margin-bottom:12px">Máquinas Virtuales</div>
       ${vmsHTML}
     `);
+    tdRenderStatic('slice-view-canvas', s);
   } catch (e) {
     toast(e.message, 'error');
   }

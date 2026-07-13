@@ -656,12 +656,18 @@ async def get_slice(
                 interfaces=interfaces
             ))
 
+    if slice_obj.iaas_target == "openstack":
+        links = (slice_obj.topology or {}).get("links", [])
+    else:
+        links = slice_obj.topology or []
+
     return schemas.SliceDetailResponse(
         id=slice_obj.id,
         name=slice_obj.name,
         status=slice_obj.status,
         vlan_slice=slice_obj.vlan_slice,
-        vms=vms
+        vms=vms,
+        links=links
     )
 
 # ---------------------------------------------------------------------------
