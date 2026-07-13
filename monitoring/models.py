@@ -37,3 +37,6 @@ class VirtualMachine(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     slice_id: Mapped[int] = mapped_column(Integer, ForeignKey("slices.id", ondelete="CASCADE"))
     worker_id: Mapped[int] = mapped_column(Integer, ForeignKey("workers.id"), nullable=True)
+    ram: Mapped[int] = mapped_column(Integer, nullable=False)
+    vcpu: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="PENDING_APPROVAL")
