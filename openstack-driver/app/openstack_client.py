@@ -1,8 +1,33 @@
 import requests
 import json
 import logging
+import base64
 
 logger = logging.getLogger("openstack-driver.client")
+
+
+def build_static_network_userdata(networks_config: list) -> str:
+    """
+    Genera (en base64) el script bash de userdata que asigna IPs estáticas a las
+    interfaces internas de la VM, ya que las redes de los slices no tienen DHCP.
+
+    networks_config: lista de dicts con al menos {"net_name", "ip", "cidr"} y,
+    opcionalmente, {"iface": "ethN"} para fijar la interfaz explícitamente.
+    Si no se indica 'iface', se numeran secuencialmente desde eth1 (eth0 se
+    reserva para la interfaz de la red 'external', que no se toca).
+    """
+    lines = [
+        "#!/bin/bash",
+        "# Configuracion estatica de interfaces internas (las redes de slice no tienen DHCP).",
+        "# La interfaz de la red 'external' no se modifica.",
+    ]
+    for idx, net in enumerate(networks_config, start=1):
+        iface = net.get("iface") or f"eth{idx}"
+        lines.append(f"ip addr add {net['ip']}/{net['cidr']} dev {iface}")
+        lines.append(f"ip link set {iface} up")
+
+    script = "\n".join(lines) + "\n"
+    return base64.b64encode(script.encode("utf-8")).decode("utf-8")
 
 class OpenStackClient:
     def __init__(self, keystone_url: str, neutron_url: str, nova_url: str, glance_url: str, compute_api_version: str, mock_mode: bool = False):
@@ -30,7 +55,10 @@ class OpenStackClient:
         self.create_network = lambda token, name: f"net-{name}-uuid"
         self.delete_network = lambda *args, **kwargs: None
         self.create_subnet = lambda token, network_id, name, cidr: f"subnet-{name}-uuid"
-        self.create_port = lambda token, name, network_id, project_id: f"port-{name}-uuid"
+        self.create_port = lambda token, name, network_id, project_id: {
+            "id": f"port-{name}-uuid",
+            "fixed_ips": [{"ip_address": "192.168.100.10", "subnet_id": "mock-subnet-uuid"}]
+        }
         self.delete_port = lambda *args, **kwargs: None
         self.create_server = lambda *args, **kwargs: {"server": {"id": "mock-server-uuid"}}
         self.delete_server = lambda *args, **kwargs: None
@@ -46,6 +74,9 @@ class OpenStackClient:
             {"id": "img-cirros-uuid", "name": "cirros-0.6.2", "status": "active", "size": 16300000},
             {"id": "img-ubuntu-uuid", "name": "ubuntu-22.04", "status": "active", "size": 700000000},
         ]
+        self.create_image = lambda token, name, disk_format, container_format, visibility: f"img-{name}-uuid"
+        self.upload_image_data = lambda token, image_id, file_obj: None
+        self.delete_image = lambda *args, **kwargs: None
 
     def _check(self, response: requests.Response, expected_status: int, op_name: str):
         if response.status_code != expected_status:
@@ -220,7 +251,7 @@ class OpenStackClient:
         self._check(res, 201, "create_subnet")
         return res.json()["subnet"]["id"]
 
-    def create_port(self, token: str, name: str, network_id: str, project_id: str) -> str:
+    def create_port(self, token: str, name: str, network_id: str, project_id: str) -> dict:
         url = f"{self.neutron_url}/ports"
         headers = {
             "Content-Type": "application/json",
@@ -236,7 +267,7 @@ class OpenStackClient:
         }
         res = requests.post(url, json=data, headers=headers, timeout=15)
         self._check(res, 201, "create_port")
-        return res.json()["port"]["id"]
+        return res.json()["port"]
 
     def delete_port(self, token: str, port_id: str):
         url = f"{self.neutron_url}/ports/{port_id}"
@@ -279,7 +310,7 @@ class OpenStackClient:
 
     # --- NOVA ---
 
-    def create_server(self, token: str, name: str, flavor_ref: str, image_ref: str, port_ids: list, host: str = None) -> dict:
+    def create_server(self, token: str, name: str, flavor_ref: str, image_ref: str, port_ids: list, host: str = None, networks_config: list = None) -> dict:
         url = f"{self.nova_url}/servers"
         headers = {
             "Content-Type": "application/json",
@@ -296,7 +327,13 @@ class OpenStackClient:
         }
         if host:
             data["server"]["availability_zone"] = f"nova:{host}"
-            
+
+        if networks_config:
+            # Cirros no trae cloud-init completo: config_drive=True asegura que
+            # el userdata quede disponible aunque no haya servicio de metadata por red.
+            data["server"]["user_data"] = build_static_network_userdata(networks_config)
+            data["server"]["config_drive"] = True
+
         res = requests.post(url, json=data, headers=headers, timeout=20)
         self._check(res, 202, "create_server")
         return res.json()
@@ -362,3 +399,40 @@ class OpenStackClient:
         res = requests.get(url, headers=headers, timeout=15)
         self._check(res, 200, "list_images")
         return res.json().get("images", [])
+
+    def create_image(self, token: str, name: str, disk_format: str, container_format: str, visibility: str) -> str:
+        """Registra los metadatos de una nueva imagen en Glance (aún sin datos binarios)."""
+        url = f"{self.glance_url}/images"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Auth-Token": token
+        }
+        data = {
+            "name": name,
+            "disk_format": disk_format,
+            "container_format": container_format,
+            "visibility": visibility
+        }
+        res = requests.post(url, json=data, headers=headers, timeout=15)
+        self._check(res, 201, "create_image")
+        return res.json()["id"]
+
+    def upload_image_data(self, token: str, image_id: str, file_obj) -> None:
+        """Sube el contenido binario del disco a una imagen ya registrada en Glance.
+
+        `file_obj` es un objeto file-like (streameado por `requests`, no se
+        carga completo en memoria) apuntando al inicio del archivo.
+        """
+        url = f"{self.glance_url}/images/{image_id}/file"
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "X-Auth-Token": token
+        }
+        res = requests.put(url, data=file_obj, headers=headers, timeout=3600)
+        self._check(res, 204, "upload_image_data")
+
+    def delete_image(self, token: str, image_id: str) -> None:
+        url = f"{self.glance_url}/images/{image_id}"
+        headers = {"X-Auth-Token": token}
+        res = requests.delete(url, headers=headers, timeout=15)
+        self._check(res, 204, "delete_image")
