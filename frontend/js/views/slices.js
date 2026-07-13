@@ -148,8 +148,6 @@ async function renderAllSlices() {
 }
 
 // ── Detalle de slice (modal) ──────────────────────────────────
-// El backend ya no devuelve topología ni IPs en el detalle;
-// las interfaces traen: interface_name, tap_name, vlan_inner, bridge_name.
 async function viewSliceDetail(id) {
   try {
     const s = await api('GET', `/slices/${id}`);
@@ -159,24 +157,12 @@ async function viewSliceDetail(id) {
           <strong style="font-size:13px">${esc(vm.name)}</strong>
           ${badge(vm.status)}
         </div>
-        <div style="font-size:12px;color:var(--text-muted);display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap">
-          ${vm.worker_id  ? `<span>Worker: ${vm.worker_id}</span>`   : ''}
+        <div style="font-size:12px;color:var(--text-muted);display:flex;gap:16px;flex-wrap:wrap">
+          ${vm.worker_id  ? `<span>Worker: ${esc(vm.worker_name) || vm.worker_id}</span>`   : ''}
           ${vm.vnc_port   ? `<span>VNC: ${vm.vnc_port}</span>`       : ''}
           ${vm.process_id ? `<span>PID: ${vm.process_id}</span>`     : ''}
           ${vm.vnc_url    ? `<a href="${esc(vm.vnc_url)}" target="_blank" rel="noopener" style="color:var(--primary)">Abrir consola VNC ↗</a>` : ''}
         </div>
-        ${vm.interfaces.length ? `
-          <div class="table-wrap"><table>
-            <thead><tr><th>Interfaz</th><th>TAP</th><th>VLAN inner</th><th>Bridge</th></tr></thead>
-            <tbody>${vm.interfaces.map(i => `
-              <tr>
-                <td class="mono">${esc(i.interface_name) || '—'}</td>
-                <td class="mono text-muted">${esc(i.tap_name) || '—'}</td>
-                <td class="mono text-muted">${i.vlan_inner != null ? i.vlan_inner : '—'}</td>
-                <td class="mono text-muted">${esc(i.bridge_name) || '—'}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table></div>` : '<p class="text-muted text-sm">Sin interfaces asignadas aún.</p>'}
       </div>`).join('') || '<p class="text-muted text-sm">No hay VMs.</p>';
 
     openModal(`Slice #${s.id} — ${esc(s.name)}`, `

@@ -597,6 +597,15 @@ async def get_slice(
         if not student or student.admin_id != user.id:
             raise HTTPException(status_code=403, detail="Not authorized")
 
+    worker_ids = {vm.worker_id for vm in slice_obj.vms if vm.worker_id is not None}
+    worker_names = {}
+    if worker_ids:
+        workers_res = await db.execute(
+            text("SELECT id, hostname FROM workers WHERE id = ANY(:ids)"),
+            {"ids": list(worker_ids)}
+        )
+        worker_names = {row.id: row.hostname for row in workers_res}
+
     vms = []
     async with httpx.AsyncClient(timeout=5.0) as client:
         for vm in slice_obj.vms:
@@ -625,6 +634,7 @@ async def get_slice(
                 id=vm.id,
                 name=vm.name,
                 worker_id=vm.worker_id,
+                worker_name=worker_names.get(vm.worker_id),
                 status=vm.status,
                 process_id=vm.process_id,
                 vnc_port=vm.vnc_port,

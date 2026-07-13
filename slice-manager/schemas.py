@@ -85,6 +85,7 @@ class VMDetail(BaseModel):
     id: int
     name: str
     worker_id: Optional[int]
+    worker_name: Optional[str] = None
     status: str
     process_id: Optional[int]
     vnc_port: Optional[int]
