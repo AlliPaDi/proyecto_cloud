@@ -639,6 +639,11 @@ async def get_slice(
                 process_id=vm.process_id,
                 vnc_port=vm.vnc_port,
                 vnc_url=vnc_url,
+                base_image=vm.base_image,
+                flavor=vm.flavor,
+                ram=vm.ram,
+                vcpu=vm.vcpu,
+                disk=vm.disk,
                 interfaces=interfaces
             ))
 

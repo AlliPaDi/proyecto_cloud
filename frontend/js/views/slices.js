@@ -157,6 +157,11 @@ async function viewSliceDetail(id) {
           <strong style="font-size:13px">${esc(vm.name)}</strong>
           ${badge(vm.status)}
         </div>
+        <div style="font-size:12px;color:var(--text-muted);display:flex;gap:16px;margin-bottom:6px;flex-wrap:wrap">
+          ${vm.base_image ? `<span>Imagen: ${esc(vm.base_image)}</span>` : ''}
+          ${vm.flavor     ? `<span>Flavor: ${esc(vm.flavor)}</span>`     : ''}
+          ${(vm.vcpu || vm.ram || vm.disk) ? `<span>Specs: ${vm.vcpu ? `${vm.vcpu} vCPU` : ''}${vm.ram ? ` / ${vm.ram} MB RAM` : ''}${vm.disk ? ` / ${vm.disk} GB disco` : ''}</span>` : ''}
+        </div>
         <div style="font-size:12px;color:var(--text-muted);display:flex;gap:16px;flex-wrap:wrap">
           ${vm.worker_id  ? `<span>Worker: ${esc(vm.worker_name) || vm.worker_id}</span>`   : ''}
           ${vm.vnc_port   ? `<span>VNC: ${vm.vnc_port}</span>`       : ''}

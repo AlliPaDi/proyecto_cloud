@@ -90,6 +90,11 @@ class VMDetail(BaseModel):
     process_id: Optional[int]
     vnc_port: Optional[int]
     vnc_url: Optional[str] = None
+    base_image: Optional[str] = None
+    flavor: Optional[str] = None
+    ram: Optional[int] = None
+    vcpu: Optional[int] = None
+    disk: Optional[int] = None
     interfaces: List[VmInterfaceDetail]
 
     class Config:
