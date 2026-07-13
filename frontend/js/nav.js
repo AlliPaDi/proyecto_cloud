@@ -11,7 +11,6 @@ function navItems(role) {
     pending:   `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
     network:   `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="3"/><circle cx="5" cy="19" r="3"/><circle cx="19" cy="19" r="3"/><line x1="12" y1="8" x2="5.5" y2="16.5"/><line x1="12" y1="8" x2="18.5" y2="16.5"/></svg>`,
     infra:     `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="4" rx="1"/><rect x="2" y="10" width="20" height="4" rx="1"/><rect x="2" y="17" width="20" height="4" rx="1"/></svg>`,
-    monitoring: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>`,
     images:    `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M16 6V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>`,
     flavors:   `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6 6 1-4.5 4.5 1 6.5-5.5-3-5.5 3 1-6.5L3 9l6-1z"/></svg>`,
     users:     `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="16" y1="11" x2="22" y2="11"/></svg>`,
@@ -35,7 +34,6 @@ function navItems(role) {
       { id: 'all-slices',  label: 'Todos los Slices', icon: icon.slices    },
       { id: 'new-slice',   label: 'Crear Slice',      icon: icon.new       },
       { id: 'infra',       label: 'Infraestructura',  icon: icon.infra     },
-      { id: 'monitoring',  label: 'Monitoreo',        icon: icon.monitoring},
       { id: 'images',      label: 'Imágenes',         icon: icon.images    },
       { id: 'networking',  label: 'Redes & VLANs',    icon: icon.network   },
       { id: 'users',       label: 'Usuarios',         icon: icon.users     },
@@ -45,8 +43,6 @@ function navItems(role) {
 }
 
 function navigate(viewId) {
-  if (typeof stopMonitoring === 'function') stopMonitoring();
-
   state.view = viewId;
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.view === viewId);
@@ -59,7 +55,6 @@ function navigate(viewId) {
     'pending':    'Solicitudes Pendientes',
     'all-slices': 'Todos los Slices',
     'infra':      'Infraestructura',
-    'monitoring': 'Monitoreo de Recursos',
     'images':     'Gestión de Imágenes de Sistema',
     'networking': 'Redes & VLANs',
     'users':      'Gestión de Usuarios',
@@ -73,7 +68,6 @@ function navigate(viewId) {
     'pending':    renderPending,
     'all-slices': renderAllSlices,
     'infra':      renderInfra,
-    'monitoring': renderMonitoring,
     'images':     renderImages,
     'networking': renderNetworking,
     'users':      renderUsers,

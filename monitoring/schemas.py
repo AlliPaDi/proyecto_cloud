@@ -25,29 +25,3 @@ class HealthResponse(BaseModel):
     status: str
     ssh_enabled: bool
     last_poll: str
-
-class HardwareTotal(BaseModel):
-    cores: int
-    ram_gb: float
-
-class ResourcesAssigned(BaseModel):
-    cores: int
-    ram_gb: float
-
-class ResourcesUtilized(BaseModel):
-    cores: float
-    ram_gb: float
-
-class NodeMetrics(BaseModel):
-    node_name: str
-    status: str
-    hardware_total: HardwareTotal
-    resources_assigned: ResourcesAssigned
-    resources_utilized: ResourcesUtilized
-
-class ClusterMetrics(BaseModel):
-    cluster_type: str
-    nodes: List[NodeMetrics]
-
-class MetricsResponse(BaseModel):
-    clusters: List[ClusterMetrics]
