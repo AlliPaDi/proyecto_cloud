@@ -252,24 +252,20 @@ class OpenStackOrchestrator:
         # --- Paso 8: Crear Puertos (Ports) ---
         logger.info("Paso 8: Creando puertos lógicos...")
         vm_ports = {}  # VM name -> lista de port IDs
-        vm_static_networks = {}  # VM name -> redes internas con IP estática (para userdata)
-        net_cfg_map = {n.name: n for n in req.networks}
-
+        
         for vm in req.vms:
             port_ids = []
-            static_networks = []
             for idx, net_name in enumerate(vm.networks):
                 net_id = net_map.get(net_name)
                 if not net_id:
                     raise Exception(f"La red {net_name} especificada en la VM {vm.name} no está definida.")
-
+                
                 port_name = f"port_{vm.name}_{idx}"
-
+                
                 if net_id == provider_net_id:
                     # Puertos en la red Provider compartida se crean como admin pero asociados al proyecto del alumno
-                    # Esta interfaz ya funciona por defecto (DHCP/metadata de la red externa): no se toca.
                     logger.info(f"Creando puerto externo '{port_name}' en red Provider...")
-                    port = await loop.run_in_executor(
+                    p_id = await loop.run_in_executor(
                         None,
                         self.client.create_port,
                         admin_token,
@@ -280,7 +276,7 @@ class OpenStackOrchestrator:
                 else:
                     # Puertos en redes privadas se crean con el scoped token del proyecto
                     logger.info(f"Creando puerto interno '{port_name}' en red privada '{net_name}'...")
-                    port = await loop.run_in_executor(
+                    p_id = await loop.run_in_executor(
                         None,
                         self.client.create_port,
                         scoped_token,
@@ -288,23 +284,8 @@ class OpenStackOrchestrator:
                         net_id,
                         project_id
                     )
-                    # Neutron ya asignó una IP a este puerto, pero la red no tiene DHCP,
-                    # así que esa IP nunca llega a la VM. Se guarda para inyectarla luego
-                    # vía userdata, junto con la interfaz real (eth{idx}) en la que Nova
-                    # la va a conectar según el orden de 'networks' pasado a create_server.
-                    fixed_ips = port.get("fixed_ips") or []
-                    net_cfg = net_cfg_map.get(net_name)
-                    if fixed_ips and net_cfg and net_cfg.cidr:
-                        static_networks.append({
-                            "net_name": net_name,
-                            "ip": fixed_ips[0]["ip_address"],
-                            "cidr": net_cfg.cidr.split("/")[-1],
-                            "iface": f"eth{idx}",
-                        })
-
-                port_ids.append(port["id"])
+                port_ids.append(p_id)
             vm_ports[vm.name] = port_ids
-            vm_static_networks[vm.name] = static_networks
 
         # --- Paso 9: Crear Instancias (Nova) ---
         logger.info("Paso 9: Lanzando instancias en Nova...")
@@ -312,7 +293,6 @@ class OpenStackOrchestrator:
         
         for vm in req.vms:
             ports = vm_ports[vm.name]
-            static_networks = vm_static_networks.get(vm.name, [])
             logger.info(f"Instanciando VM '{vm.name}' con puertos {ports} en host {vm.host}...")
             server_res = await loop.run_in_executor(
                 None,
@@ -322,8 +302,7 @@ class OpenStackOrchestrator:
                 vm.flavor,
                 vm.image,
                 ports,
-                vm.host,
-                static_networks
+                vm.host
             )
             server_id = server_res["server"]["id"]
             vm_details.append(VmDeployDetail(
