@@ -263,11 +263,15 @@ async def _activate_openstack_slice(slice_obj: models.Slice, db: AsyncSession):
                     except ValueError:
                         pass
 
+        # Remove duplicates preserving order, and sort so that provider/external networks always come first (map to eth0)
+        unique_networks = list(dict.fromkeys(vm_networks))
+        unique_networks.sort(key=lambda net: 0 if net.upper() in ["INTERNET", "INET", "WAN", "EXTERNAL", "EXTERNAL-PROVIDER"] else 1)
+            
         vm_vms_payload.append({
             "name": vm.name,
             "image": vm.base_image,
             "flavor": vm.flavor,
-            "networks": list(set(vm_networks))
+            "networks": unique_networks
         })
 
     task_payload = {
