@@ -6,7 +6,7 @@ from service import update_all_workers_metrics
 from router import router
 import os
 
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "15"))
 
 async def poll_workers():
     while True:

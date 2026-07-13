@@ -72,6 +72,7 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator_db
       - SSH_ENABLED=true
+      - POLL_INTERVAL=15
     depends_on:
       - postgres
     volumes:
