@@ -606,8 +606,19 @@ async def get_slice(
         )
         worker_names = {row.id: row.hostname for row in workers_res}
 
+    OPENSTACK_DRIVER_URL = os.getenv("OPENSTACK_DRIVER_URL", "http://openstack-driver:8089")
+    image_names = {}
+
     vms = []
     async with httpx.AsyncClient(timeout=5.0) as client:
+        if slice_obj.iaas_target == "openstack":
+            try:
+                res = await client.get(f"{OPENSTACK_DRIVER_URL}/v1/images")
+                if res.status_code == 200:
+                    image_names = {img["id"]: img["name"] for img in res.json().get("images", [])}
+            except Exception:
+                pass
+
         for vm in slice_obj.vms:
             interfaces = []
             for iface in vm.interfaces:
@@ -623,7 +634,6 @@ async def get_slice(
             vnc_url = vm.vnc_url
             if slice_obj.iaas_target == "openstack" and vm.instance_path:
                 try:
-                    OPENSTACK_DRIVER_URL = os.getenv("OPENSTACK_DRIVER_URL", "http://openstack-driver:8089")
                     res = await client.get(f"{OPENSTACK_DRIVER_URL}/v1/vms/{vm.instance_path}/vnc")
                     if res.status_code == 200:
                         vnc_url = res.json().get("vnc_url", vm.vnc_url)
@@ -639,8 +649,7 @@ async def get_slice(
                 process_id=vm.process_id,
                 vnc_port=vm.vnc_port,
                 vnc_url=vnc_url,
-                base_image=vm.base_image,
-                flavor=vm.flavor,
+                base_image=image_names.get(vm.base_image, vm.base_image),
                 ram=vm.ram,
                 vcpu=vm.vcpu,
                 disk=vm.disk,
