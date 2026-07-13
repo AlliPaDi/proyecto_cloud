@@ -13,12 +13,16 @@ async def update_all_workers_metrics(session: AsyncSession):
     result = await session.execute(select(Worker))
     workers = result.scalars().all()
 
-    for worker in workers:
-        if not SSH_ENABLED:
-            continue
-            
-        metrics = await get_worker_metrics(worker.ip_management)
-        
+    if not SSH_ENABLED or not workers:
+        return
+
+    # Consultados en paralelo: cada host tiene su propio timeout (SSH_TIMEOUT),
+    # así un worker caído no retrasa el refresco de los demás.
+    all_metrics = await asyncio.gather(
+        *(get_worker_metrics(w.ip_management) for w in workers)
+    )
+
+    for worker, metrics in zip(workers, all_metrics):
         if metrics:
             if "total_ram" in metrics and worker.total_ram == 0:
                 worker.total_ram = metrics["total_ram"]
